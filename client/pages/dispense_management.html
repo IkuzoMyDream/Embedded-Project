@@ -1,0 +1,93 @@
+<!doctype html><html lang="th"><head>
+<meta charset="utf-8">
+<title>จัดการคิว & สต็อกยา</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  .wrap {max-width: 980px; margin: 24px auto; padding: 8px;}
+  h2 {margin: 16px 0 8px}
+  table { width:100%; border-collapse: collapse; margin: 8px 0 }
+  th, td { border:1px solid #ddd; padding:8px; vertical-align: top;}
+  th { background:#f5f5f5; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+  .qty { width:90px }
+  .right { text-align:right }
+  .muted{ color:#666; font-size: 12px }
+  .danger{ color:#b00020 }
+  .success{ color:#0a7a3b }
+  .btn{ padding:6px 10px; cursor:pointer }
+</style>
+</head><body>
+<div class="wrap">
+  <h1>จัดการคิว & สต็อกยา</h1>
+
+  <!-- SECTION 1: คิว -->
+  <section id="sec-queue">
+    <h2>ส่วนที่ 1: จัดคิวจ่ายยา</h2>
+
+    <div class="row">
+      <label>ผู้ป่วย</label>
+      <select id="patient"></select>
+      <span class="muted">(* เพิ่ม/แก้ผู้ป่วยไปทำที่หน้าผู้ป่วย)</span>
+    </div>
+
+    <div class="row" style="margin-top:8px">
+      <label>เลือกยา</label>
+      <select id="pill"></select>
+      <input id="qty" class="qty" type="number" min="1" value="1">
+      <button id="addItemBtn" class="btn">เพิ่มเข้ารายการ</button>
+      <span class="muted">หมายเหตุ: ยาน้ำจะถูกกำหนดจำนวน = 1 อัตโนมัติ</span>
+    </div>
+
+    <table id="itemsTbl">
+      <thead>
+        <tr>
+          <th>ยา</th>
+          <th>ประเภท</th>
+          <th class="right">สต็อกคงเหลือ</th>
+          <th class="right">จำนวนที่จ่าย</th>
+          <th>ลบ</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <button id="submitQueueBtn" class="btn">บันทึกคิว</button>
+    <div id="msg" style="margin-top:6px"></div>
+  </section>
+
+  <hr style="margin:24px 0">
+
+  <!-- SECTION 2: สต็อก -->
+  <section id="sec-stock">
+    <h2>ส่วนที่ 2: จัดการสต็อกยา</h2>
+
+    <div class="row">
+      <input id="newPillName" placeholder="ชื่อยา (เช่น ยาพาราเซตามอล 500มก)">
+      <select id="newPillType">
+        <option value="solid">ยาเม็ด</option>
+        <option value="liquid">ยาน้ำ</option>
+      </select>
+      <input id="newPillAmount" class="qty" type="number" min="0" value="0" placeholder="จำนวนเริ่มต้น">
+      <button id="addPillBtn" class="btn">เพิ่มยาใหม่</button>
+    </div>
+
+    <table id="stockTbl">
+      <thead>
+        <tr>
+          <th>ยา</th>
+          <th>ประเภท</th>
+          <th class="right">คงเหลือ</th>
+          <th class="right">ปรับจำนวน (+/−)</th>
+          <th>ลบ</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="muted">หน่วย: ยาเม็ด = <b>เม็ด</b>, ยาน้ำ = <b>ลิตร</b></div>
+  </section>
+</div>
+
+<script src="/static/js/api.js"></script>
+<script src="/static/js/dispense_management.js"></script>
+</body></html>
+
