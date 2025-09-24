@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>จัดการคิว</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<style>
+  .wrap {max-width: 980px; margin: 24px auto; padding: 8px}
+  h2 {margin: 16px 0 8px}
+  table { width:100%; border-collapse: collapse; margin: 8px 0 }
+  th, td { border:1px solid #ddd; padding:8px; vertical-align: top}
+  th { background:#f5f5f5 }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap: wrap }
+  .muted{ color:#666; font-size: 12px }
+  .btn{ padding:6px 10px; cursor:pointer }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>จัดการคิว (หน้าใหม่)</h1>
+  <p class="muted">หน้านี้อ้างอิงจากหน้าอื่น ๆ ในโฟลเดอร์ <code>client/pages</code></p>
+
+  <section>
+    <h2>คิวปัจจุบัน</h2>
+    <div id="current"></div>
+    <div style="margin-top:8px">
+      <button id="delBtn" class="btn">ลบคิวปัจจุบัน</button>
+    </div>
+  </section>
+
+  <hr style="margin:24px 0">
+
+  <section>
+    <h2>บันทึกเหตุการณ์ล่าสุด</h2>
+    <table id="logsTbl">
+      <thead><tr><th>ID</th><th>Queue</th><th>เวลา</th><th>เหตุการณ์</th><th>ข้อความ</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</div>
+
+<script>
+const API = {
+  getDashboard: () => fetch('/api/dashboard').then(r=>r.json()),
+  deleteQueue: (id) => fetch(`/api/queues/${id}`, {method:'DELETE'}).then(r=>r.json())
+}
+
+function renderCurrent(cur){
+  const el = document.getElementById('current')
+  if(!cur){ el.innerHTML = '<div class="muted">ไม่มีคิวที่รออยู่</div>'; return }
+  el.innerHTML = `<div>คิว#: <b>${cur.queue_number}</b> ผู้ป่วย: <b>${cur.patient_name}</b> ห้อง: <b>${cur.room}</b> สถานะ: <b>${cur.status}</b></div>`
+}
+
+function renderLogs(logs){
+  const tbody = document.querySelector('#logsTbl tbody')
+  tbody.innerHTML = ''
+  logs.forEach(l=>{
+    const tr = document.createElement('tr')
+    tr.innerHTML = `<td>${l.id}</td><td>${l.queue_id}</td><td>${l.ts || ''}</td><td>${l.event}</td><td>${l.message}</td>`
+    tbody.appendChild(tr)
+  })
+}
+
+let lastCurrentId = null
+function poll(){
+  API.getDashboard().then(data=>{
+    renderCurrent(data.current)
+    renderLogs(data.logs || [])
+    lastCurrentId = data.current ? data.current.queue_id : null
+  }).catch(e=>console.error(e))
+}
+
+document.getElementById('delBtn').addEventListener('click', ()=>{
+  if(!lastCurrentId){ alert('ไม่มีคิวให้ลบ'); return }
+  if(!confirm('ต้องการลบคิวปัจจุบันหรือไม่?')) return
+  API.deleteQueue(lastCurrentId).then(()=>{ poll() })
+})
+
+poll()
+setInterval(poll, 3000)
+</script>
+</body>
+</html>

@@ -1,21 +1,48 @@
-from flask import Flask, send_from_directory, request, jsonify
+from flask import Flask, send_from_directory, request, jsonify, current_app
 from flask_cors import CORS
 import json
 from .db import init_db, query, execute
 from .config import FLASK_HOST, FLASK_PORT, MQTT_TOPIC_CMD
 from .mqtt_client import get_client
+import os
 
-app = Flask(__name__, static_folder="../client/static", static_url_path="/static")
+# detect react build folder
+build_static = os.path.join(os.path.dirname(__file__), '..', 'client', 'build', 'static')
+if os.path.exists(build_static):
+    static_folder = os.path.join(os.path.dirname(__file__), '..', 'client', 'build')
+    static_url_path = ''
+else:
+    # during dev serve legacy static folder
+    static_folder = os.path.join(os.path.dirname(__file__), '..', 'client', 'static')
+    static_url_path = '/static'
+
+app = Flask(__name__, static_folder=static_folder, static_url_path=static_url_path)
 CORS(app)
 
-# ---- serve pages ----
-@app.route("/")
+# ---- serve pages / react ----
+@app.route('/')
 def root():
-    return send_from_directory("../client/pages", "dashboard.html")
+    # if react build exists serve index.html from build
+    build_index = os.path.join(app.static_folder, 'index.html')
+    if os.path.exists(build_index):
+        return send_from_directory(app.static_folder, 'index.html')
+    # fallback to legacy pages
+    return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'client', 'pages'), 'dashboard.html')
 
-@app.route("/pages/<path:page>")
-def pages(page):
-    return send_from_directory("../client/pages", page)
+@app.route('/<path:filename>')
+def serve_any(filename):
+    # serve built static assets first
+    if os.path.exists(os.path.join(app.static_folder, filename)):
+        return send_from_directory(app.static_folder, filename)
+    # serve legacy pages
+    legacy_path = os.path.join(os.path.dirname(__file__), '..', 'client', 'pages')
+    if os.path.exists(os.path.join(legacy_path, filename)):
+        return send_from_directory(legacy_path, filename)
+    # fallback to index for client-side routing
+    build_index = os.path.join(app.static_folder, 'index.html')
+    if os.path.exists(build_index):
+        return send_from_directory(app.static_folder, 'index.html')
+    return ('Not Found', 404)
 
 # ---- API: basic reads ----
 @app.get("/api/dashboard")
@@ -54,11 +81,28 @@ def api_add_queue():
       ]
     }
     """
-    data = request.get_json(force=True)
-    patient_id = int(data["patient_id"])
+    # log raw body for debugging
+    raw = request.get_data(as_text=True)
+    try:
+        data = request.get_json(force=True)
+    except Exception as e:
+        app.logger.exception('Failed to parse JSON for /api/queues: %s', e)
+        return jsonify({"error": "invalid json"}), 400
+
+    app.logger.debug('POST /api/queues raw body: %s', raw)
+    app.logger.debug('POST /api/queues parsed json: %s', data)
+
+    patient_id = data.get("patient_id")
     items = data.get("items", [])
     if not items:
+        app.logger.warning('items required payload=%s', data)
         return jsonify({"error": "items required"}), 400
+
+    # ensure patient_id is integer
+    try:
+        patient_id = int(patient_id)
+    except Exception:
+        return jsonify({"error": "invalid patient_id"}), 400
 
     # Validate + normalize quantity (liquid = 1)
     pill_ids = [int(x["pill_id"]) for x in items]
@@ -95,7 +139,7 @@ def api_add_queue():
     for it in norm_items:
         execute(
             "INSERT INTO queue_items(queue_id,pill_id,quantity) VALUES(?,?,?)",
-            (qid, it["pill_id"], it["quantity"])
+            (qid, it["pill_id"], it["quantity"]) 
         )
 
     # event log

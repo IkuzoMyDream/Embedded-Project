@@ -1,0 +1,12 @@
+.wrap {max-width: 980px; margin: 24px auto; padding: 8px}
+h2 {margin: 16px 0 8px}
+table { width:100%; border-collapse: collapse; margin: 8px 0 }
+th, td { border:1px solid #ddd; padding:8px; vertical-align: top}
+th { background:#f5f5f5 }
+.row { display:flex; gap:8px; align-items:center; flex-wrap: wrap }
+.qty { width:90px }
+.right { text-align:right }
+.muted{ color:#666; font-size: 12px }
+.danger{ color:#b00020 }
+.success{ color:#0a7a3b }
+.btn{ padding:6px 10px; cursor:pointer }
