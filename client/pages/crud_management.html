@@ -1,0 +1,21 @@
+<!doctype html><html><head>
+<meta charset="utf-8"><title>CRUD</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head><body>
+<h1>CRUD (patients / pills / queues)</h1>
+<p>Template placeholder — extend as needed. For quick demo, delete a queue by ID:</p>
+<div class="card">
+  <input id="qid" placeholder="queue id">
+  <button id="delBtn">Delete Queue</button>
+  <div id="msg"></div>
+</div>
+<script src="/static/js/api.js"></script>
+<script>
+document.getElementById('delBtn').onclick = async ()=>{
+  const id = document.getElementById('qid').value.trim();
+  if(!id) return;
+  const r = await API.deleteQueue(id);
+  document.getElementById('msg').textContent = r.ok ? 'Deleted' : 'Failed';
+};
+</script>
+</body></html>

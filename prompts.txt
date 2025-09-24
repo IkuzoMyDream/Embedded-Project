@@ -1,0 +1,45 @@
+i want create system (web and database) to host a website for our team (ระบบจ่ายยาอัจฉริยะ), hosting with odroid, what stack you would to suggest , or just html css pure cause it light weight? (just localhost, no deploy), i mean this is embedded system module project, so we need to use embedded device to host, this case we want to odroid, in this system dont have login , just ui show data ทำเป็นห้องจ่ายยา 1 2 3 ... จะมียามาจ่ายอัจตโนมัติ ตาม db ท่ี่บันทึกไว้ตามรายคน
+
+flow การทำงาน เพิ่ม queue ผ่านหน้า queue_management.html -> mqtt pub/sub ไปยัง (nodemcu | esp32 )เพื่อ control servo motor เปิด ปิด ยา => แล้วไหลบนสายพานไปยังห้องจ่ายยา 1,2,3 โดย (1,2) = capsule pill (3) = water pill , in case patient requires water pills make it go to room 3 only
+
+pills has 5 type, 
+
+ยาเม็ด 4 ชนิด
+ยานํ้า 1 ชนิด (in case patient requires water pills make it go to room 3 only )
+
+ตอน present จะโชว์ แค่ 3 page, ( queue_management, dashboard)
+
+3 page
+
+- dashboard.html page
+			- current queue (queue number, patient name, ห้องจ่ายยา)
+			- log queue
+			- success queue (count)
+- queue_management.html page
+			- add queue => map (patient, pills)
+- crud_management.html page
+			- curd (patience, pills, queue, ...)
+
+***production***
+make it all lightweight and simple
+
+frontend  (just open static file, no need to host frontend, ex (c//user/desktop/proj/dashboard.html)
+frontend <-> database using flask
+frontend <-> (nodemcu | esp32) using mqtt
+
+proj structure
+├───client
+│   ├───pages
+│   └───static
+│       ├───css
+│       ├───img
+│       └───js
+├───data
+└───server
+    └───__pycache__
+
+
+***
+give me requirements.txt
+simple template of each page, each js, each .py (flask,mqtt,...)
+for push in git, (im now dev in labtop) and will pull in odriod for production

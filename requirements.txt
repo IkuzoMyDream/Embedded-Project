@@ -1,2 +1,4 @@
-fastapi
-uvicorn
+Flask==3.0.3
+Flask-Cors==4.0.1
+paho-mqtt==1.6.1
+python-dotenv==1.0.1 
