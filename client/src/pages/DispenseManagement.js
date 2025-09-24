@@ -56,47 +56,92 @@ export default function DispenseManagement(){
   }
 
   return (
-    <div className="wrap">
-      <h1>จัดการคิว & สต็อกยา (React)</h1>
-      {loading && <div className="muted">กำลังโหลดข้อมูล…</div>}
-      {msg && <div style={{marginBottom:8}} className="muted">{msg}</div>}
-
-      <div className="row">
-        <label>ผู้ป่วย</label>
-        <select value={patient} onChange={e=>setPatient(e.target.value)}>
-          <option value="">-- เลือก --</option>
-          {lookup.patients.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-        </select>
+    <div className="container">
+      <div className="header">
+        <div className="header-left">
+          <div className="brand">
+            <div className="logo">SD</div>
+            <div>
+              <h1>จัดการคิว & สต็อกยา</h1>
+              <div className="subtitle">สร้างคิวและสั่งจ่ายยาสำหรับผู้ป่วย</div>
+            </div>
+          </div>
+        </div>
+        <div className="nav">
+          <div className="stickers-row">
+            <div className="sticker-badge"><span className="emoji">💊</span><span className="text">ตู้ยา</span></div>
+            <div className="sticker-badge"><span className="emoji">🩺</span><span className="text">แผนก</span></div>
+          </div>
+        </div>
       </div>
 
-      <div className="row" style={{marginTop:8}}>
-        <label>เลือกยา</label>
-        <select value={pill} onChange={e=>setPill(e.target.value)}>
-          <option value="">-- เลือก --</option>
-          {lookup.pills.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-        </select>
-        <input className="qty" type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} />
-        <button className="btn" onClick={addItem}>เพิ่มเข้ารายการ</button>
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">เลือกผู้ป่วยและยา</div>
+            <div className="card-sub">เลือกรายการยาที่ต้องการจ่าย</div>
+          </div>
+        </div>
+
+        <div className="row">
+          <label>ผู้ป่วย</label>
+          <select value={patient} onChange={e=>setPatient(e.target.value)}>
+            <option value="">-- เลือก --</option>
+            {lookup.patients.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+          </select>
+        </div>
+
+        <div className="row" style={{marginTop:8}}>
+          <label>เลือกยา</label>
+          <select value={pill} onChange={e=>setPill(e.target.value)}>
+            <option value="">-- เลือก --</option>
+            {lookup.pills.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+          </select>
+          <input className="qty" type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} />
+          <button className="btn" onClick={addItem}>เพิ่มเข้ารายการ</button>
+        </div>
       </div>
 
-      <table id="itemsTbl">
-        <thead>
-          <tr><th>ยา</th><th>ประเภท</th><th className="right">สต็อกคงเหลือ</th><th className="right">จำนวนที่จ่าย</th><th>ลบ</th></tr>
-        </thead>
-        <tbody>
-          {items.map((it,idx)=> (
-            <tr key={idx}>
-              <td>{it.name}</td>
-              <td>{it.type}</td>
-              <td className="right">-</td>
-              <td className="right">{it.quantity}</td>
-              <td><button onClick={()=>setItems(items.filter((_,i)=>i!==idx))}>ลบ</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">รายการยา</div>
+            <div className="card-sub">ตรวจสอบก่อนบันทึก</div>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr><th>ยา</th><th>ประเภท</th><th className="right">สต็อกคงเหลือ</th><th className="right">จำนวนที่จ่าย</th><th>ลบ</th></tr>
+          </thead>
+          <tbody>
+            {items.map((it,idx)=> (
+              <tr key={idx}>
+                <td>{it.name}</td>
+                <td>{it.type}</td>
+                <td className="right">-</td>
+                <td className="right">{it.quantity}</td>
+                <td><button className="btn secondary" onClick={()=>setItems(items.filter((_,i)=>i!==idx))}>ลบ</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      <button className="btn" onClick={submit}>บันทึกคิว</button>
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="card-title">ดำเนินการ</div>
+            <div className="card-sub">บันทึกหรือยกเลิกการทำรายการ</div>
+          </div>
+        </div>
+        <div className="row" style={{justifyContent:'space-between', alignItems:'center'}}>
+          <div>
+            <button className="btn" onClick={submit}>บันทึกคิว</button>
+            <button className="btn secondary" style={{marginLeft:8}} onClick={()=>{setItems([]); setMsg('')}}>ล้าง</button>
+          </div>
+          <div className="muted">{msg}</div>
+        </div>
+      </div>
     </div>
   )
 }
