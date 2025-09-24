@@ -5,6 +5,7 @@ from .db import init_db, query, execute
 from .config import FLASK_HOST, FLASK_PORT, MQTT_TOPIC_CMD
 from .mqtt_client import get_client
 import os
+import logging
 
 # detect react build folder
 build_static = os.path.join(os.path.dirname(__file__), '..', 'client', 'build', 'static')
@@ -18,6 +19,12 @@ else:
 
 app = Flask(__name__, static_folder=static_folder, static_url_path=static_url_path)
 CORS(app)
+
+# configure logging to show debug messages in console
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+app.logger.setLevel(logging.DEBUG)
+# also set werkzeug logger to INFO or DEBUG if needed
+logging.getLogger('werkzeug').setLevel(logging.INFO)
 
 # ---- serve pages / react ----
 @app.route('/')
@@ -47,17 +54,38 @@ def serve_any(filename):
 # ---- API: basic reads ----
 @app.get("/api/dashboard")
 def api_dashboard():
-    current = query("""
+    # fetch all pending/sent queues ordered by creation (to determine current and next)
+    pending = query("""
       SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
       FROM queues q
       JOIN patients p ON p.id=q.patient_id
       JOIN rooms r ON r.id=q.target_room
       WHERE q.status IN ('pending','sent')
-      ORDER BY q.created_at ASC LIMIT 1
+      ORDER BY q.created_at ASC
     """)
+
+    current = pending[0] if pending else None
+    next_q = pending[1] if len(pending) > 1 else None
+
+    # previous = most recent successful queue (last served)
+    prev = query("""
+      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
+      FROM queues q
+      JOIN patients p ON p.id=q.patient_id
+      JOIN rooms r ON r.id=q.target_room
+      WHERE q.status = 'success'
+      ORDER BY q.created_at DESC LIMIT 1
+    """)
+
     logs = query("SELECT id, queue_id, ts, event, message FROM events ORDER BY id DESC LIMIT 50")
     success_count = query("SELECT COUNT(*) AS cnt FROM queues WHERE status='success'")[0]["cnt"]
-    return jsonify({"current": current[0] if current else None, "logs": logs, "success_count": success_count})
+    return jsonify({
+        "previous": prev[0] if prev else None,
+        "current": current,
+        "next": next_q,
+        "logs": logs,
+        "success_count": success_count
+    })
 
 @app.get("/api/lookup")
 def api_lookup():
@@ -141,6 +169,21 @@ def api_add_queue():
             "INSERT INTO queue_items(queue_id,pill_id,quantity) VALUES(?,?,?)",
             (qid, it["pill_id"], it["quantity"]) 
         )
+        # ลดจำนวนสต็อกยาในตาราง pills ตามจำนวนที่จ่าย (ไม่ให้ติดลบ)
+        try:
+            # log current amount
+            before = query("SELECT amount FROM pills WHERE id=?", (it["pill_id"],))
+            app.logger.debug('Pill %s before amount=%s', it.get('pill_id'), (before[0]["amount"] if before else None))
+
+            execute(
+                "UPDATE pills SET amount = MAX(0, amount - ?) WHERE id=?",
+                (it["quantity"], it["pill_id"])
+            )
+
+            after = query("SELECT amount FROM pills WHERE id=?", (it["pill_id"],))
+            app.logger.debug('Pill %s after amount=%s', it.get('pill_id'), (after[0]["amount"] if after else None))
+        except Exception as e:
+            app.logger.exception('Failed to update pill amount for pill_id=%s: %s', it.get('pill_id'), e)
 
     # event log
     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)",
@@ -157,9 +200,23 @@ def api_add_queue():
     client.publish(MQTT_TOPIC_CMD, json.dumps(payload), qos=1, retain=False)
     execute("UPDATE queues SET status='sent' WHERE id=?", (qid,))
 
-    # ส่งกลับ queue_number เพื่อใช้แสดงหน้าเว็บ
+    # return queue_number และ updated pill amounts เพื่อให้ client อัปเดตสต็อกทันที
     qrow = query("SELECT queue_number FROM queues WHERE id=?", (qid,))
-    return jsonify({"queue_id": qid, "queue_number": qrow[0]["queue_number"], "target_room": target_room})
+
+    # build list of pill ids from the normalized items (safer)
+    try:
+        updated_ids = [it['pill_id'] for it in norm_items]
+        if updated_ids:
+            placeholders = ','.join(['?'] * len(updated_ids))
+            updated_pills = query(f"SELECT id, amount FROM pills WHERE id IN ({placeholders})", tuple(updated_ids))
+        else:
+            updated_pills = []
+    except Exception as e:
+        app.logger.exception('Failed to fetch updated_pills: %s', e)
+        updated_pills = []
+    app.logger.debug('Returning updated_pills: %s', updated_pills)
+
+    return jsonify({"queue_id": qid, "queue_number": qrow[0]["queue_number"], "target_room": target_room, "updated_pills": updated_pills})
 
 def _pick_solid_room():
     r1 = query("SELECT COUNT(*) cnt FROM queues WHERE target_room=1")[0]["cnt"]

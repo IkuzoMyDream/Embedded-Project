@@ -10,6 +10,7 @@ export default function QueueManagement(){
 
   function poll(){
     API.getDashboard().then(d=>{
+      console.debug('API /api/dashboard ->', d)
       setData(d || {})
     }).catch(e=>console.error(e))
   }
