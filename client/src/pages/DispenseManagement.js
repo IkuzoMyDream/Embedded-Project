@@ -14,6 +14,8 @@ export default function DispenseManagement(){
   const [items, setItems] = useState([])
   const [msg, setMsg] = useState('')
   const [loading, setLoading] = useState(true)
+  const [showModal, setShowModal] = useState(false)
+  const [modalMsg, setModalMsg] = useState('')
 
   useEffect(()=>{
     let mounted = true
@@ -64,7 +66,17 @@ export default function DispenseManagement(){
     const reserved = getReserved(pillId)
     const available = (stock === null) ? Infinity : (stock - reserved)
     if(stock !== null && q > available) return setMsg('จำนวนมากกว่าสต็อกคงเหลือ')
-    setItems(prev=>[...prev,{pill_id:p.id, name:p.name, type:p.type, quantity:q}])
+    setItems(prev => {
+      // ถ้ามีรายการนี้อยู่แล้ว ให้เพิ่มจำนวน
+      const idx = prev.findIndex(it => String(it.pill_id) === String(p.id))
+      if(idx !== -1){
+        const updated = [...prev]
+        updated[idx] = { ...updated[idx], quantity: updated[idx].quantity + q }
+        return updated
+      }
+      // ถ้ายังไม่มี ให้เพิ่มใหม่
+      return [...prev,{pill_id:p.id, name:p.name, type:p.type, quantity:q}]
+    })
     setMsg('เพิ่มรายการยา: '+p.name)
   }
 
@@ -81,6 +93,8 @@ export default function DispenseManagement(){
       } else {
         setMsg('บันทึกแล้ว: '+(r.queue_number||r.queue_id))
         setItems([])
+        setShowModal(true)
+        setModalMsg('บันทึกคิวเสร็จสิ้น!')
         // update local pill amounts if server returned updated_pills
         try {
           if (r.updated_pills && Array.isArray(r.updated_pills)) {
@@ -114,6 +128,25 @@ export default function DispenseManagement(){
 
   return (
     <div className="container">
+      {/* แสดง Role คนไข้ ใน nav ด้านขวาบน */}
+      <div className="nav" style={{display:'flex',alignItems:'center',justifyContent:'flex-end',marginBottom:16}}>
+        <div style={{minWidth:160}}>
+          <div className="card" style={{background:'#fff3e0',color:'#f57c00',padding:'8px 16px',textAlign:'center',boxShadow:'0 2px 8px rgba(0,0,0,0.04)',fontSize:16}}>
+            <span className="emoji" style={{fontSize:20,marginRight:6}}>🧑‍🦰</span>Role: คนไข้
+          </div>
+        </div>
+      </div>
+      {/* Modal Success */}
+      {showModal && (
+        <div style={{position:'fixed',top:0,left:0,width:'100vw',height:'100vh',background:'rgba(0,0,0,0.25)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <div style={{background:'#fff',borderRadius:12,padding:32,minWidth:320,boxShadow:'0 2px 16px rgba(0,0,0,0.12)',textAlign:'center',position:'relative'}}>
+            <div style={{fontSize:64,marginBottom:16}}>✅</div>
+            <div style={{fontSize:22,fontWeight:700,marginBottom:8}}>{modalMsg}</div>
+            <button className="btn" style={{marginTop:16}} onClick={()=>setShowModal(false)}>ปิด</button>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div className="card-header">
           <div>
@@ -134,7 +167,7 @@ export default function DispenseManagement(){
 
       <div className="card">
         <div className="card-header"><div><div className="card-title">รายการยาทั้งหมด</div><div className="card-sub">เลือกจำนวนและเพิ่มไปยังรายการ</div></div></div>
-        <table>
+        <table className="dispense-table">
           <thead>
             <tr>
               <th>ยา</th>
@@ -196,7 +229,11 @@ export default function DispenseManagement(){
                   <td>{it.type}</td>
                   <td className="right">{Math.max(0, stock - (getReserved(it.pill_id)) )}</td>
                   <td className="right">{it.quantity}</td>
-                  <td><button className="btn secondary" onClick={()=>removeItem(idx)}>ลบ</button></td>
+                  <td>
+                    <button className="btn" style={{color:'#fff',background:'#e53935',border:'none',fontSize:20,padding:'4px 12px',borderRadius:6}} onClick={()=>removeItem(idx)} title="ลบ">
+                      ×
+                    </button>
+                  </td>
                 </tr>
               )
             })}
