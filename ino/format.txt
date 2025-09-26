@@ -41,6 +41,24 @@ Hardware notes:
 - D3/D4 have pull-ups and are safer to use as outputs after boot.
 - Servos accept 3.3V signal but servo/motor power must be 5–12V separate supply; share GND.
 
+NodeMCU -> Arduino wiring (logic interface)
+------------------------------------------------
+Connect NodeMCU outputs (logic-only) to Arduino digital inputs. Use this mapping for NodeMCU1 -> Arduino1:
+
+    NodeMCU (ESP)      Function / Signal        Arduino (controller)
+    ------------------  ------------------------  -----------------
+    D1 (GPIO5)         servo1_signal (logic)     Arduino D2 (PIN_IN_SERVO1)
+    D2 (GPIO4)         servo2_signal (logic)     Arduino D3 (PIN_IN_SERVO2)
+    D5 (GPIO14)        servo3_signal (logic)     Arduino D4 (PIN_IN_SERVO3)
+    D6 (GPIO12)        servo4_signal (logic)     Arduino D5 (PIN_IN_SERVO4)
+    D7 (GPIO13)        dcmotor1_enable (logic)   Arduino D6 (PIN_IN_DC_EN)
+
+Wiring notes:
+- Shared ground: always connect NodeMCU GND <-> Arduino GND.
+- Signal levels: NodeMCU outputs 3.3V which Arduino digital inputs read as HIGH. If you use 5V logic boards on the MCU side, use level shifting.
+- Pull mode: NodeMCU actively drives lines HIGH/LOW. Configure Arduino pins as INPUT (no internal pull-ups) and rely on NodeMCU drive state. If you prefer pull-ups, wire and invert logic consistently.
+- Safety: DO NOT connect motor power to MCU pins. Motor drivers should have their own supply with common GND; Arduino drives the driver inputs.
+
 #nodemcu1 — 5 pins รวม: servo1–4 = 4 pins, dcmotor1 = 1 pin
 
     servo1 → D1 (GPIO5)
