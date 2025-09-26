@@ -77,9 +77,33 @@ def api_dashboard():
       ORDER BY q.created_at DESC LIMIT 1
     """)
 
+    # currently processing queues
+    processing = query("""
+      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
+      FROM queues q
+      JOIN patients p ON p.id=q.patient_id
+      JOIN rooms r ON r.id=q.target_room
+      WHERE q.status = 'processing'
+      ORDER BY q.created_at ASC
+    """)
+
+    # recent served (success) queues
+    served = query("""
+      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.served_at
+      FROM queues q
+      JOIN patients p ON p.id=q.patient_id
+      JOIN rooms r ON r.id=q.target_room
+      WHERE q.status = 'success'
+      ORDER BY q.served_at DESC
+      LIMIT 10
+    """)
+
     logs = query("SELECT id, queue_id, ts, event, message FROM events ORDER BY id DESC LIMIT 50")
     success_count = query("SELECT COUNT(*) AS cnt FROM queues WHERE status='success'")[0]["cnt"]
     return jsonify({
+        "pending": pending,
+        "processing": processing,
+        "served": served,
         "previous": prev[0] if prev else None,
         "current": current,
         "next": next_q,
@@ -186,8 +210,17 @@ def api_add_queue():
             app.logger.exception('Failed to update pill amount for pill_id=%s: %s', it.get('pill_id'), e)
 
     # event log
+    # enrich items with pill name for event log (for all event types)
+    def enrich_items(items):
+        pill_ids = [int(x["pill_id"]) for x in items]
+        pills = {p["id"]: p for p in query(
+            f"SELECT id,name FROM pills WHERE id IN ({','.join(['?']*len(pill_ids))})",
+            tuple(pill_ids)
+        )}
+        return [{"pill_id": it["pill_id"], "name": pills.get(it["pill_id"],{}).get("name"), "quantity": it["quantity"]} for it in items]
+
     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)",
-            (qid, "created", json.dumps({"patient_id": patient_id, "items": norm_items})))
+            (qid, "created", json.dumps({"patient_id": patient_id, "items": enrich_items(norm_items)})))
 
     # publish mqtt command (ส่งทั้ง list ของยา)
     client = get_client()

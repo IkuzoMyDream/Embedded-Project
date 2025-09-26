@@ -1,12 +1,15 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import './App.css'
 import logo from './pages/embededlogo.png'
 import DispenseManagement from './pages/DispenseManagement'
 import QueueManagement from './pages/QueueManagement'
 import Dashboard from './pages/Dashboard'
 import CrudManagement from './pages/CrudManagement'
+import { BrowserRouter as Router, Route, Routes, Link, useLocation } from 'react-router-dom'
 
-function Header({page, setPage}){
+function Header(){
+  const location = useLocation()
+  const path = location.pathname
   return (
     <div className="header">
       <div className="brand">
@@ -17,28 +20,55 @@ function Header({page, setPage}){
         </div>
       </div>
       <div className="nav">
-        <button onClick={()=>setPage('dashboard')} className={`btn ${page==='dashboard' ? 'active' : ''}`} aria-pressed={page==='dashboard'}>แดชบอร์ด</button>
-        <button onClick={()=>setPage('dispense')} className={`btn ${page==='dispense' ? 'active' : ''}`} style={{marginLeft:8}} aria-pressed={page==='dispense'}>จัดยา</button>
-        <button onClick={()=>setPage('queue')} className={`btn ${page==='queue' ? 'active' : ''}`} style={{marginLeft:8}} aria-pressed={page==='queue'}>คิว</button>
-        <button onClick={()=>setPage('crud')} className={`btn ${page==='crud' ? 'active' : ''}`} style={{marginLeft:8}} aria-pressed={page==='crud'}>CRUD</button>
+        <Link to="/" className={`btn ${path==='/' ? 'active' : ''}`}>แดชบอร์ด</Link>
+        <Link to="/dispense" className={`btn ${path==='/dispense' ? 'active' : ''}`} style={{marginLeft:8}}>จัดยา</Link>
+        <Link to="/queue" className={`btn ${path==='/queue' ? 'active' : ''}`} style={{marginLeft:8}}>คิว</Link>
+        <Link to="/crud" className={`btn ${path==='/crud' ? 'active' : ''}`} style={{marginLeft:8}}>CRUD</Link>
       </div>
     </div>
   )
 }
 
 export default function App(){
-  const [page, setPage] = React.useState('dashboard')
+  const [showNav, setShowNav] = useState(true)
+  const [lastScroll, setLastScroll] = useState(window.scrollY)
+
+  useEffect(() => {
+    let ticking = false
+    const onScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const curr = window.scrollY
+          if (curr > lastScroll + 10) setShowNav(false)
+          else if (curr < lastScroll - 10) setShowNav(true)
+          setLastScroll(curr)
+          ticking = false
+        })
+        ticking = true
+      }
+    }
+    window.addEventListener('scroll', onScroll)
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [lastScroll])
 
   return (
-    <div>
-      <Header page={page} setPage={setPage} />
-      <div style={{padding:8, borderBottom:'1px solid transparent'}}>
-        {/* keep space for header if needed */}
+    <Router>
+      <div className="app-container">
+        <div className={showNav ? 'nav-visible' : 'nav-hidden'}>
+          <Header />
+        </div>
+        <div style={{padding:8, borderBottom:'1px solid transparent'}}>
+          {/* keep space for header if needed */}
+        </div>
+        <div className="main-content">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/queue" element={<QueueManagement />} />
+            <Route path="/dispense" element={<DispenseManagement />} />
+            <Route path="/crud" element={<CrudManagement />} />
+          </Routes>
+        </div>
       </div>
-      {page==='dashboard' && <Dashboard />}
-      {page==='dispense' && <DispenseManagement />}
-      {page==='queue' && <QueueManagement />}
-      {page==='crud' && <CrudManagement />}
-    </div>
+    </Router>
   )
 }
