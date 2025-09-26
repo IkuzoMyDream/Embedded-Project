@@ -1,13 +1,14 @@
 # nodeId = {1,2}
 
-disp/cmd/{nodeId}    // Controller → สั่งงาน
+# Topics (nodeId is 1 or 2): use disp/cmd/{nodeId} to target a specific NodeMCU
+disp/cmd/{nodeId}    // Controller (server) → สั่งงาน NodeMCU (nodeId = 1|2)
 *****************************************************************************************
     { "queue_id": <queueId>, "op": <device>, "id": <servoId>, "on": <1|0,on|off> }
 
         op = {servo | dc | step | pump}
-        servoId = {1 | 2 | 3 | 4 | 5 | 6}    //nodeMCU1 = {1|2|3|4}, nodeMCU2 = {5|6}
+    servoId = {1 | 2 | 3 | 4 | 5 | 6}    // nodeMCU1 = {1|2|3|4}, nodeMCU2 = {5|6}
 
-
+ 
 disp/ack/{nodeId}    // Node → ตอบรับรับคำสั่ง (accepted)       queue<pending -> in_progress>
 *****************************************************************************************
     { "queue_id": <queueId>, "accepted": <1|0> }
@@ -28,15 +29,17 @@ disp/state/{nodeId}  // Node → heartbeat (health snapshot)
 
 
 
-Pin Map (NodeMCU / ESP8266)
+Roles and hardware notes
 
-หมายเหตุสำคัญ:
+- NodeMCU (ESP8266/ESP32) role: orchestration / network interface. It subscribes to MQTT (disp/cmd/{nodeId}), parses commands, and sends simple logic signals (GPIO 0/1) to the downstream Arduino. NodeMCU should NOT directly drive high-current motors unless you know the power/driver arrangement.
 
-หลีกเลี่ยง D8 (GPIO15) ถ้ายังไม่ชัวร์เรื่อง bootstrap;
+- Arduino role: local controller. Receives logic-level signals from NodeMCU and drives the actuators (servos, DC motor drivers, stepper drivers, pumps) using proper drivers and power supplies.
 
-D3/D4 มี pull-up, ปลอดภัยกว่าใช้เป็นเอาต์พุตหลังบูต;
+Hardware notes:
 
-Servos รับสัญญาณ 3.3V ได้ แต่ ไฟเลี้ยงเซอร์โว/มอเตอร์ ต้องแยก 5–12V และ GND ร่วม.
+- Avoid D8 (GPIO15) on NodeMCU if uncertain about boot mode.
+- D3/D4 have pull-ups and are safer to use as outputs after boot.
+- Servos accept 3.3V signal but servo/motor power must be 5–12V separate supply; share GND.
 
 #nodemcu1 — 5 pins รวม: servo1–4 = 4 pins, dcmotor1 = 1 pin
 
@@ -50,11 +53,11 @@ Servos รับสัญญาณ 3.3V ได้ แต่ ไฟเลี้�
 
     dcmotor1_enable → D7 (GPIO13) (1 = หมุน, 0 = หยุด; ทิศคงที่ตามการต่อไดรเวอร์)
 
-        คำสั่งตัวอย่าง (publish → disp/cmd/1):
+        คำสั่งตัวอย่าง (publish → disp/cmd/{nodeId}):
 
-            ปล่อยยาเม็ดชนิด 2: { "queue_id":123, "op":"servo", "id":2, "on":1 }
+            ปล่อยยาเม็ดชนิด 2 (ไป nodemcu1): { "queue_id":123, "op":"servo", "id":2, "on":1 }
 
-            เปิดสายพาน: { "queue_id":123, "op":"dc", "on":1 }
+            เปิดสายพาน (nodemcu1): { "queue_id":123, "op":"dc", "on":1 }
 
             หยุดสายพาน (เมื่อ nodemcu2 success): { "queue_id":123, "op":"dc", "on":0 }
 
@@ -73,14 +76,16 @@ dcmotor2_enable → D5 (GPIO14)
 
     step_DIR → D3 (GPIO0) หรือ D4 (GPIO2) (เลือกอย่างใดอย่างหนึ่ง)
 
-        คำสั่งตัวอย่าง (publish → disp/cmd/2):
+        คำสั่งตัวอย่าง (publish → disp/cmd/{nodeId}):
 
-            เปิด dcmotor2: { "queue_id":123, "op":"dc", "on":1 }
+            เปิด dcmotor2 (nodemcu2): { "queue_id":123, "op":"dc", "on":1 }
 
-            เปิด pump: { "queue_id":123, "op":"pump", "on":1 }
+            เปิด pump (nodemcu2): { "queue_id":123, "op":"pump", "on":1 }
 
-            ตั้ง servo5: { "queue_id":123, "op":"servo", "id":5, "on":1 }
+            ตั้ง servo5 (nodemcu2 -> arduino): { "queue_id":123, "op":"servo", "id":5, "on":1 }
 
-            หมุนสเต็ปไปทางขวา (ห้อง 2/3): { "queue_id":123, "op":"step", "dir":"R" }
+            หมุนสเต็ปไปทางขวา (ห้อง 2/3, nodemcu2): { "queue_id":123, "op":"step", "dir":"R" }
 
-            หมุนสเต็ปไปทางซ้าย (ห้อง 1): { "queue_id":123, "op":"step", "dir":"L" }
+            หมุนสเต็ปไปทางซ้าย (ห้อง 1, nodemcu2): { "queue_id":123, "op":"step", "dir":"L" }
+
+Note: NodeMCU only sends logic signals to Arduino (e.g. digitalWrite HIGH/LOW). The detailed actuator control (PWM, step pulses) is implemented on the Arduino side.
