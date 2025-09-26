@@ -1,0 +1,86 @@
+# nodeId = {1,2}
+
+disp/cmd/{nodeId}    // Controller → สั่งงาน
+*****************************************************************************************
+    { "queue_id": <queueId>, "op": <device>, "id": <servoId>, "on": <1|0,on|off> }
+
+        op = {servo | dc | step | pump}
+        servoId = {1 | 2 | 3 | 4 | 5 | 6}    //nodeMCU1 = {1|2|3|4}, nodeMCU2 = {5|6}
+
+
+disp/ack/{nodeId}    // Node → ตอบรับรับคำสั่ง (accepted)       queue<pending -> in_progress>
+*****************************************************************************************
+    { "queue_id": <queueId>, "accepted": <1|0> }
+
+
+disp/evt/{nodeId}    // Node → แจ้ง “งานจบ” สำหรับ queue นั้น   queue<in_progress -> success>
+*****************************************************************************************
+    { "queue_id": <queueId>, "done": 1, "status": "success", "room": <roomId> }
+
+        roomId = {1 | 2 | 3}
+
+
+disp/state/{nodeId}  // Node → heartbeat (health snapshot)
+*****************************************************************************************
+    # don't have payload, for check status
+
+
+
+
+
+Pin Map (NodeMCU / ESP8266)
+
+หมายเหตุสำคัญ:
+
+หลีกเลี่ยง D8 (GPIO15) ถ้ายังไม่ชัวร์เรื่อง bootstrap;
+
+D3/D4 มี pull-up, ปลอดภัยกว่าใช้เป็นเอาต์พุตหลังบูต;
+
+Servos รับสัญญาณ 3.3V ได้ แต่ ไฟเลี้ยงเซอร์โว/มอเตอร์ ต้องแยก 5–12V และ GND ร่วม.
+
+#nodemcu1 — 5 pins รวม: servo1–4 = 4 pins, dcmotor1 = 1 pin
+
+    servo1 → D1 (GPIO5)
+
+    servo2 → D2 (GPIO4)
+
+    servo3 → D5 (GPIO14)
+
+    servo4 → D6 (GPIO12)
+
+    dcmotor1_enable → D7 (GPIO13) (1 = หมุน, 0 = หยุด; ทิศคงที่ตามการต่อไดรเวอร์)
+
+        คำสั่งตัวอย่าง (publish → disp/cmd/1):
+
+            ปล่อยยาเม็ดชนิด 2: { "queue_id":123, "op":"servo", "id":2, "on":1 }
+
+            เปิดสายพาน: { "queue_id":123, "op":"dc", "on":1 }
+
+            หยุดสายพาน (เมื่อ nodemcu2 success): { "queue_id":123, "op":"dc", "on":0 }
+
+
+#nodemcu2 — ต้องการ 6 pins “stepmotor ซ้าย/ขวา”
+
+dcmotor2_enable → D5 (GPIO14)
+
+    pump → D6 (GPIO12)
+
+    servo5 → D1 (GPIO5)
+
+    servo6 → D2 (GPIO4)
+
+    step_STEP → D7 (GPIO13)
+
+    step_DIR → D3 (GPIO0) หรือ D4 (GPIO2) (เลือกอย่างใดอย่างหนึ่ง)
+
+        คำสั่งตัวอย่าง (publish → disp/cmd/2):
+
+            เปิด dcmotor2: { "queue_id":123, "op":"dc", "on":1 }
+
+            เปิด pump: { "queue_id":123, "op":"pump", "on":1 }
+
+            ตั้ง servo5: { "queue_id":123, "op":"servo", "id":5, "on":1 }
+
+            หมุนสเต็ปไปทางขวา (ห้อง 2/3): { "queue_id":123, "op":"step", "dir":"R" }
+
+            หมุนสเต็ปไปทางซ้าย (ห้อง 1): { "queue_id":123, "op":"step", "dir":"L" }

@@ -219,7 +219,7 @@ def api_add_queue():
     return jsonify({"queue_id": qid, "queue_number": qrow[0]["queue_number"], "target_room": target_room, "updated_pills": updated_pills})
 
 def _pick_solid_room():
-    r1 = query("SELECT COUNT(*) cnt FROM queues WHERE target_room=1")[0]["cnt"]
+    r1 = query("SELECT COUNT(*) cnt FROM queues WHElRE target_room=1")[0]["cnt"]
     r2 = query("SELECT COUNT(*) cnt FROM queues WHERE target_room=2")[0]["cnt"]
     return 1 if r1 <= r2 else 2
 
