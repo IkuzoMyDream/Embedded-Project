@@ -30,6 +30,8 @@ const int PIN_SERVO1 = D1; // GPIO5
 const int PIN_SERVO2 = D2; // GPIO4
 const int PIN_SERVO3 = D5; // GPIO14
 const int PIN_SERVO4 = D6; // GPIO12
+// DC motor / continuous output pin — will be forced ON while a command is executing
+const int PIN_DC     = D7; // GPIO13
 
 // pulse duration per dispense action (ms)
 const unsigned long PULSE_MS = 200;
@@ -129,6 +131,8 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // Accept command
   publishAck(queueId, true);
+  // Ensure DC is ON for the duration of this command (user requested)
+  digitalWrite(PIN_DC, HIGH);
   // if payload contains 'items' array, map pill_id -> servo pin and actuate
   if (d.containsKey("items")) {
     JsonArray items = d["items"].as<JsonArray>();
@@ -171,6 +175,13 @@ void handleSerial() {
       Serial.printf("[node] Sensor triggered: %d\n", val);
       publishEvt(activeQueue, val);
       delay(500);
+      // reset outputs on task end: DC off and all logic signals to LOW
+      digitalWrite(PIN_DC, LOW);
+      digitalWrite(PIN_SERVO1, LOW);
+      digitalWrite(PIN_SERVO2, LOW);
+      digitalWrite(PIN_SERVO3, LOW);
+      digitalWrite(PIN_SERVO4, LOW);
+
       g_ready = true;         // unlock
       publishState();
       activeQueue = -1;
@@ -208,6 +219,20 @@ void setup() {
   wifiEnsure();
   mqtt.setCallback(onMessage);
   mqttEnsure();
+
+  // configure logic output pins
+  pinMode(PIN_SERVO1, OUTPUT);
+  pinMode(PIN_SERVO2, OUTPUT);
+  pinMode(PIN_SERVO3, OUTPUT);
+  pinMode(PIN_SERVO4, OUTPUT);
+  pinMode(PIN_DC, OUTPUT);
+
+  // ensure all outputs start LOW
+  digitalWrite(PIN_SERVO1, LOW);
+  digitalWrite(PIN_SERVO2, LOW);
+  digitalWrite(PIN_SERVO3, LOW);
+  digitalWrite(PIN_SERVO4, LOW);
+  digitalWrite(PIN_DC, LOW);
 }
 
 void loop() {
