@@ -60,9 +60,33 @@ def api_dashboard():
       FROM queues q
       JOIN patients p ON p.id=q.patient_id
       JOIN rooms r ON r.id=q.target_room
-      WHERE q.status IN ('pending','sent')
+      WHERE q.status IN ('pending','sent','in_progress')
       ORDER BY q.created_at ASC
     """)
+
+    # --- เพิ่มเติม: ดึง queue_items ของ pending ทั้งหมด ---
+    pending_ids = [q['queue_id'] for q in pending]
+    items_by_queue = {}
+    if pending_ids:
+        placeholders = ','.join(['?']*len(pending_ids))
+        rows = query(f"""
+            SELECT qi.queue_id, qi.pill_id, qi.quantity, p.name as pill_name
+            FROM queue_items qi
+            JOIN pills p ON p.id=qi.pill_id
+            WHERE qi.queue_id IN ({placeholders})
+        """, tuple(pending_ids))
+        for row in rows:
+            qid = row['queue_id']
+            if qid not in items_by_queue:
+                items_by_queue[qid] = []
+            items_by_queue[qid].append({
+                'pill_id': row['pill_id'],
+                'name': row['pill_name'],
+                'quantity': row['quantity']
+            })
+    # ใส่ items ให้แต่ละ pending
+    for q in pending:
+        q['items'] = items_by_queue.get(q['queue_id'], [])
 
     current = pending[0] if pending else None
     next_q = pending[1] if len(pending) > 1 else None
@@ -83,7 +107,7 @@ def api_dashboard():
       FROM queues q
       JOIN patients p ON p.id=q.patient_id
       JOIN rooms r ON r.id=q.target_room
-      WHERE q.status = 'processing'
+      WHERE q.status IN ('processing','in_progress')
       ORDER BY q.created_at ASC
     """)
 

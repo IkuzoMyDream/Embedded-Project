@@ -61,3 +61,18 @@ table.dispense-table tr:last-child td {
 table.dispense-table tr:hover td {
   background: #f6fff6;
 }
+
+.banner-marquee {
+  animation: marquee-left 18s linear infinite;
+  will-change: transform;
+  position: relative;
+}
+
+@keyframes marquee-left {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
