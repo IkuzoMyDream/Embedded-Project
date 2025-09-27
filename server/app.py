@@ -3,7 +3,7 @@ from flask_cors import CORS
 import json
 from .db import init_db, query, execute
 from .config import FLASK_HOST, FLASK_PORT, MQTT_TOPIC_CMD
-from .mqtt_client import get_client
+from . import mqtt_client
 import os
 import logging
 
@@ -222,16 +222,17 @@ def api_add_queue():
     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)",
             (qid, "created", json.dumps({"patient_id": patient_id, "items": enrich_items(norm_items)})))
 
-    # publish mqtt command (ส่งทั้ง list ของยา)
-    client = get_client()
-    payload = {
-        "queue_id": qid,
-        "patient_id": patient_id,
-        "target_room": target_room,
-        "items": [{"pill_id": it["pill_id"], "quantity": it["quantity"]} for it in norm_items]
-    }
-    client.publish(MQTT_TOPIC_CMD, json.dumps(payload), qos=1, retain=False)
-    execute("UPDATE queues SET status='sent' WHERE id=?", (qid,))
+    # Do not publish immediately by default. Queue remains 'pending' until a node reports ready via disp/state/{nodeId}.
+    # However, if we already know a node for the target_room is ready (in-memory), try to publish immediately.
+    try:
+        client = mqtt_client.get_client()
+        node_id = 1 if target_room == 1 else 2
+        ready = getattr(mqtt_client, '_node_ready', {}).get(node_id, False)
+        if ready:
+            # publish pending for that node (this will pick the next pending queue for the node)
+            mqtt_client._publish_pending_for_node(client, node_id)
+    except Exception as e:
+        app.logger.exception('Failed to publish pending queue immediately: %s', e)
 
     # return queue_number และ updated pill amounts เพื่อให้ client อัปเดตสต็อกทันที
     qrow = query("SELECT queue_number FROM queues WHERE id=?", (qid,))
@@ -252,7 +253,7 @@ def api_add_queue():
     return jsonify({"queue_id": qid, "queue_number": qrow[0]["queue_number"], "target_room": target_room, "updated_pills": updated_pills})
 
 def _pick_solid_room():
-    r1 = query("SELECT COUNT(*) cnt FROM queues WHElRE target_room=1")[0]["cnt"]
+    r1 = query("SELECT COUNT(*) cnt FROM queues WHERE target_room=1")[0]["cnt"]
     r2 = query("SELECT COUNT(*) cnt FROM queues WHERE target_room=2")[0]["cnt"]
     return 1 if r1 <= r2 else 2
 
@@ -294,7 +295,7 @@ def delete_pill(pid):
 
 if __name__ == "__main__":
     init_db()
-    get_client()
+    mqtt_client.get_client()
     app.run(host=FLASK_HOST, port=FLASK_PORT)
 
 

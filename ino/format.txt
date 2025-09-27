@@ -21,9 +21,19 @@ disp/evt/{nodeId}    // Node → แจ้ง “งานจบ” สำหร
         roomId = {1 | 2 | 3}
 
 
-disp/state/{nodeId}  // Node → heartbeat (health snapshot)
+disp/state/{nodeId}  // Node → heartbeat / readiness (health snapshot)
 *****************************************************************************************
-    # don't have payload, for check status
+    # Preferred payload examples:
+    { "online": 1 }       // node is online (retained recommended)
+    { "ready": 1 }        // node is idle and ready to accept next pending queue
+
+Flow (recommended):
+ 1. Node boots and publishes disp/state/{nodeId} {"online":1} (retained)
+ 2. When node is idle and able to accept work, publish disp/state/{nodeId} {"ready":1}
+ 3. Server receives ready and publishes next pending queue to disp/cmd/{nodeId}
+ 4. Node receives command, publishes disp/ack/{nodeId} {"queue_id":..., "accepted":1}
+ 5. Node performs the work (NodeMCU coordinates Arduino) and when finished publishes disp/evt/{nodeId} {"queue_id":..., "done":1, "status":"success", "room":<roomId>}
+ 6. Node may wait a short delay, then publish disp/state/{nodeId} {"ready":1} again to receive the next queue
 
 
 

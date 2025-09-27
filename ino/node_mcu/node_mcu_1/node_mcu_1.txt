@@ -102,15 +102,6 @@ void publishState() {
   publishJson(T_STATE, d, /*retain=*/true);
 }
 
-// publish ready flag (node is idle and can accept next queue)
-void publishReady(bool ready) {
-  StaticJsonDocument<128> d;
-  d[ready ? "ready" : "ready"] = ready ? 1 : 0;
-  d["uptime"] = (uint32_t)(millis()/1000);
-  // do not retain ready by default (server will act on event); keep online retained in publishState
-  publishJson(T_STATE, d, /*retain=*/false);
-}
-
 void mqttEnsure() {
   if (mqtt.connected()) return;
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
@@ -123,8 +114,6 @@ void mqttEnsure() {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);  // QoS1 for commands
     publishState();                    // retained heartbeat
-    // announce ready to accept work
-    publishReady(true);
   } else {
     Serial.printf("fail rc=%d\n", mqtt.state());
   }
@@ -163,30 +152,21 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // Acknowledge reception first
   publishAck(queueId, true);
-  // mark node busy
-  publishReady(false);
 
   if (!strcmp(op, "servo")) {
     int id = d["id"] | -1;
     int on = d["on"] | 0;
     bool ok = setServoLogic((uint8_t)id, on != 0);
     publishEvtDone(queueId, ok ? "success" : "failed");
-    // short pause then announce ready
-    delay(500);
-    publishReady(true);
 
   } else if (!strcmp(op, "dc")) {
     int on = d["on"] | 0;
     setDcEnable(on != 0);
     publishEvtDone(queueId, "success");
-    delay(500);
-    publishReady(true);
 
   } else {
     // ops 'step' and 'pump' are not for node 1; ignore gracefully
     publishEvtDone(queueId, "success");
-    delay(500);
-    publishReady(true);
   }
 }
 

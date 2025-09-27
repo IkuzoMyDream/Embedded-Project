@@ -1,16 +1,28 @@
 import json
 import logging
 import paho.mqtt.client as mqtt
-from .config import MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID, MQTT_TOPIC_ACK, MQTT_TOPIC_CMD
+from .config import MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID, MQTT_TOPIC_ACK, MQTT_TOPIC_CMD, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE
 from .db import execute, query
 
 _logger = logging.getLogger(__name__)
 _client = None
 
+# in-memory node readiness (node_id -> bool)
+_node_ready = {}
+
 
 def on_connect(client, userdata, flags, rc, properties=None):
     try:
+        # subscribe to ack/evt/state topics (wildcards expected)
         client.subscribe(MQTT_TOPIC_ACK)
+        try:
+            client.subscribe(MQTT_TOPIC_EVT)
+        except Exception:
+            pass
+        try:
+            client.subscribe(MQTT_TOPIC_STATE)
+        except Exception:
+            pass
     except Exception as e:
         _logger.exception('subscribe failed: %s', e)
 
@@ -29,41 +41,104 @@ def _publish_next_pending(client):
             'target_room': q['target_room'],
             'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
         }
-        client.publish(MQTT_TOPIC_CMD, json.dumps(payload), qos=1, retain=False)
+        # decide node id from target_room (default mapping)
+        node_id = 1 if q['target_room'] == 1 else 2
+        topic = f"disp/cmd/{node_id}"
+        client.publish(topic, json.dumps(payload), qos=1, retain=False)
         execute("UPDATE queues SET status='sent' WHERE id=?", (q['id'],))
-        _logger.info('Published next pending queue %s to device', q['id'])
+        _logger.info('Published pending queue %s to %s', q['id'], topic)
     except Exception as e:
         _logger.exception('Failed to publish next pending queue: %s', e)
+
+
+def _publish_pending_for_node(client, node_id):
+    try:
+        # publish the next pending queue that targets rooms mapped to this node
+        # simple mapping: node1 -> room1, node2 -> room2/3
+        if node_id == 1:
+            room_cond = "target_room=1"
+        else:
+            room_cond = "target_room IN (2,3)"
+        nxt = query(f"SELECT id, patient_id, target_room FROM queues WHERE status='pending' AND {room_cond} ORDER BY created_at ASC LIMIT 1")
+        if not nxt:
+            _logger.debug('No pending queue for node %s', node_id)
+            return
+        q = nxt[0]
+        items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
+        payload = {
+            'queue_id': q['id'],
+            'patient_id': q['patient_id'],
+            'target_room': q['target_room'],
+            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
+        }
+        topic = f"disp/cmd/{node_id}"
+        client.publish(topic, json.dumps(payload), qos=1, retain=False)
+        execute("UPDATE queues SET status='sent' WHERE id=?", (q['id'],))
+        _logger.info('Published pending queue %s to %s', q['id'], topic)
+    except Exception as e:
+        _logger.exception('Failed to publish pending for node %s: %s', node_id, e)
 
 
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        qid = payload.get("queue_id")
-        status = payload.get("status", "success")  # expected values: ready|processing|success|failed
-        _logger.debug('Received mqtt ack for queue=%s status=%s', qid, status)
+        topic = msg.topic
+        # try to extract node id from topic suffix (disp/ack/{nodeId}, disp/evt/{nodeId}, disp/state/{nodeId})
+        parts = topic.split('/')
+        node_id = None
+        if len(parts) >= 3:
+            try:
+                node_id = int(parts[-1])
+            except Exception:
+                node_id = None
 
-        if qid is None:
-            _logger.warning('MQTT ack missing queue_id: %s', payload)
+        # ACK: {"queue_id":..., "accepted":1}
+        if 'accepted' in payload:
+            qid = payload.get('queue_id')
+            if qid is None:
+                _logger.warning('ACK missing queue_id: %s', payload)
+            else:
+                accepted = int(payload.get('accepted', 0))
+                if accepted:
+                    execute("UPDATE queues SET status=? WHERE id=?", ('in_progress', qid))
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_accepted', json.dumps(payload)))
+                else:
+                    execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_rejected', json.dumps(payload)))
             return
 
-        # Normalize status handling
-        st = status.lower()
-        if st in ('ready', 'accepted'):
-            # device indicates it accepted the command and is ready -> mark pending
-            execute("UPDATE queues SET status=? WHERE id=?", ('pending', qid))
-            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_ready', json.dumps(payload)))
-        elif st in ('processing', 'start'):
-            execute("UPDATE queues SET status=? WHERE id=?", ('processing', qid))
-            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_processing', json.dumps(payload)))
-        elif st in ('success', 'done'):
-            execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
-            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack', json.dumps(payload)))
-            # once success, publish next pending queue (if any)
-            _publish_next_pending(client)
-        else:
-            # unknown status - record and treat as generic ack
-            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_unknown', json.dumps(payload)))
+        # EVT: {"queue_id":..., "done":1, "status":"success", "room":<id>}
+        if 'done' in payload and int(payload.get('done', 0)) == 1:
+            qid = payload.get('queue_id')
+            st = payload.get('status', 'success').lower()
+            if qid is None:
+                _logger.warning('EVT missing queue_id: %s', payload)
+            else:
+                if st in ('success', 'ok'):
+                    execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done', json.dumps(payload)))
+                else:
+                    execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_failed', json.dumps(payload)))
+                # After EVT, give node a moment; when node reports ready it will trigger next
+            return
+
+        # STATE: node readiness publish handled below (payload may be {} or {"ready":1})
+        if 'ready' in payload or 'online' in payload:
+            # interpret ready / online
+            ready = int(payload.get('ready', payload.get('online', 0)))
+            if node_id is not None:
+                _node_ready[node_id] = bool(ready)
+                execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'ready': ready})))
+                _logger.info('Node %s reported ready=%s', node_id, ready)
+                if ready:
+                    # publish next pending queue for this node
+                    _publish_pending_for_node(client, node_id)
+            return
+
+        # Unknown payload: try to log with optional queue_id
+        qid = payload.get('queue_id')
+        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'ack_unknown', json.dumps(payload)))
     except Exception as e:
         _logger.exception('failed to handle mqtt message: %s', e)
         try:
