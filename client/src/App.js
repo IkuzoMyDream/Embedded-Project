@@ -29,6 +29,36 @@ function Header(){
   )
 }
 
+function KeyGate({children}){
+  const [key, setKey] = useState(localStorage.getItem('access_key')||'')
+  const [input, setInput] = useState('')
+  const [error, setError] = useState('')
+  const requiredKey = 'gay' // สามารถเปลี่ยน key ที่นี่
+
+  if(!key || key !== requiredKey){
+    return (
+      <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100vh'}}>
+        <div className="card" style={{padding:32,minWidth:320}}>
+          <div style={{fontSize:48,marginBottom:8}}>🔒</div>
+          <h2>เข้าสู่ระบบเพื่อเข้าใช้งานแดชบอร์ด</h2>
+          <input type="password" value={input} onChange={e=>setInput(e.target.value)} placeholder="กรอกรหัสผ่าน..." style={{margin:'16px 0',padding:8,width:'100%'}} />
+          {error && <div style={{color:'red',marginBottom:8}}>{error}</div>}
+          <button className="btn" onClick={()=>{
+            if(input===requiredKey){
+              localStorage.setItem('access_key',input)
+              setKey(input)
+              setError('')
+            }else{
+              setError('รหัสผ่านไม่ถูกต้อง')
+            }
+          }}>เข้าสู่ระบบ</button>
+        </div>
+      </div>
+    )
+  }
+  return children
+}
+
 export default function App(){
   const [showNav, setShowNav] = useState(true)
   const [lastScroll, setLastScroll] = useState(window.scrollY)
@@ -62,7 +92,7 @@ export default function App(){
         </div>
         <div className="main-content">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<KeyGate><Dashboard /></KeyGate>} />
             <Route path="/queue" element={<QueueManagement />} />
             <Route path="/dispense" element={<DispenseManagement />} />
             <Route path="/crud" element={<CrudManagement />} />

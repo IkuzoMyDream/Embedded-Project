@@ -11,7 +11,7 @@ export default function Dashboard(){
   const [pending, setPending] = useState([])
   const [processing, setProcessing] = useState([])
   const [served, setServed] = useState([])
-  const [showPendingModal, setShowPendingModal] = useState(false)
+  const [showPendingModalc, setShowPendingModal] = useState(false)
 
   function poll(){
     API.getDashboard().then(d=>{
@@ -21,6 +21,7 @@ export default function Dashboard(){
       setPending(d.pending || [])
       setProcessing(d.processing || [])
       setServed(d.served || [])
+      console.log("pending queues:", d.pending)
     }).catch(console.error)
   }
 
@@ -148,7 +149,7 @@ export default function Dashboard(){
                 <th>ผู้ป่วย</th>
                 <th>ห้อง</th>
                 <th>รายการยา</th>
-                <th>เหตุผล</th>
+                <th>สถานะ</th>
               </tr>
             </thead>
             <tbody>
@@ -168,10 +169,10 @@ export default function Dashboard(){
                           ))}
                         </ul>
                       ) : (
-                        <span className="muted">-</span>
+                        <span className="muted">ไม่มีข้อมูลรายการยา</span>
                       )}
                     </td>
-                    <td>{p.reason || '-'}</td>
+                    <td>{p.status || '-'}</td>
                   </tr>
                 ))
               )}
