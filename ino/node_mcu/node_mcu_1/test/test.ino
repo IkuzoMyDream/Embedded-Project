@@ -30,13 +30,14 @@ const int PIN_SERVO1 = D1; // GPIO5
 const int PIN_SERVO2 = D2; // GPIO4
 const int PIN_SERVO3 = D5; // GPIO14
 const int PIN_SERVO4 = D6; // GPIO12
-// DC motor / continuous output pin — will be forced ON while a command is executing
-const int PIN_DC     = D7; // GPIO13
+const int PIN_DC     = D7; // GPIO13 (DC motor enable)
 
 // pulse duration per dispense action (ms)
 const unsigned long PULSE_MS = 200;
 
-const size_t MQTT_BUF = 512;
+const size_t MQTT_BUF = 1024;   // MQTT buffer size
+const size_t JSON_CAP = 1024;   // DynamicJsonDocument capacity
+
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_MS = 5000;
 
@@ -64,7 +65,7 @@ void publishState() {
   d["online"] = g_online ? 1 : 0;
   d["ready"]  = g_ready ? 1 : 0;
   d["uptime"] = (uint32_t)(millis()/1000);
-  publishJson(T_STATE, d, /*retain=*/true);   // retain latest state
+  publishJson(T_STATE, d, /*retain=*/true);
 }
 
 void publishAck(int queueId, bool accepted) {
@@ -113,16 +114,18 @@ void actuatePill(int pill_id, int quantity) {
 void onMessage(char* topic, byte* payload, unsigned int len) {
   Serial.printf("[MQTT] %s | %u bytes\n", topic, len);
 
-  // if busy (ready=0), ignore new commands
   if (!g_ready) {
     Serial.println("[node] BUSY, ignoring cmd");
     return;
   }
 
-  // Use a compile-time constant size for StaticJsonDocument (ArduinoJson requires it)
-  StaticJsonDocument<512> d;
+  // Use DynamicJsonDocument for flexibility
+  DynamicJsonDocument d(JSON_CAP);
   DeserializationError err = deserializeJson(d, payload, len);
-  if (err) { Serial.printf("[JSON] %s\n", err.c_str()); return; }
+  if (err) { 
+    Serial.printf("[JSON] %s\n", err.c_str()); 
+    return; 
+  }
 
   int queueId = d["queue_id"] | -1;
   if (queueId < 0) {
@@ -132,16 +135,17 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // Accept command
   publishAck(queueId, true);
-  // Ensure DC is ON for the duration of this command (user requested)
   digitalWrite(PIN_DC, HIGH);
-  // Support short single-item payloads {"pill_id":x, "quantity":y}
+
+  // Support single-item payload {"pill_id":x,"quantity":y}
   if (d.containsKey("pill_id")) {
     int pid = d["pill_id"] | -1;
     int qty = d["quantity"] | 1;
     Serial.printf("[node] Received single-item pill_id=%d qty=%d\n", pid, qty);
     actuatePill(pid, qty);
   }
-  // if payload contains 'items' array, map pill_id -> servo pin and actuate
+
+  // Support array {"items":[{pill_id,quantity},...]}
   if (d.containsKey("items")) {
     JsonArray items = d["items"].as<JsonArray>();
     Serial.printf("[node] Received items count=%u\n", items.size());
@@ -152,7 +156,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
       actuatePill(pid, qty);
     }
   } else {
-    // fallback: older single-op command style {"op":"servo","id":N,"on":1}
+    // fallback: {"op":"servo","id":N,"on":1}
     const char* op = d["op"] | "";
     if (op && strcmp(op, "") != 0) {
       if (!strcmp(op, "servo")) {
@@ -166,7 +170,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   }
 
   activeQueue = queueId;
-  g_ready = false;   // lock until sensor confirms
+  g_ready = false;
   publishState();
   Serial.printf("[node] Accepted queue=%d, waiting for sensor input...\n", queueId);
 }
@@ -183,14 +187,15 @@ void handleSerial() {
       Serial.printf("[node] Sensor triggered: %d\n", val);
       publishEvt(activeQueue, val);
       delay(500);
-      // reset outputs on task end: DC off and all logic signals to LOW
+
+      // reset outputs after job
       digitalWrite(PIN_DC, LOW);
       digitalWrite(PIN_SERVO1, LOW);
       digitalWrite(PIN_SERVO2, LOW);
       digitalWrite(PIN_SERVO3, LOW);
       digitalWrite(PIN_SERVO4, LOW);
 
-      g_ready = true;         // unlock
+      g_ready = true;
       publishState();
       activeQueue = -1;
     } else {
@@ -212,7 +217,7 @@ void mqttEnsure() {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);
     g_online = true;
-    publishState();   // retained state at connect
+    publishState();
   } else {
     Serial.printf("fail rc=%d\n", mqtt.state());
   }
@@ -222,15 +227,14 @@ void mqttEnsure() {
 void setup() {
   Serial.begin(115200);
   delay(50);
-  Serial.println("\n[node1] boot (test mode)");
-  // configure logic output pins early so we drive outputs immediately when commands arrive
+  Serial.println("\n[node1] boot (fixed mode)");
+
   pinMode(PIN_SERVO1, OUTPUT);
   pinMode(PIN_SERVO2, OUTPUT);
   pinMode(PIN_SERVO3, OUTPUT);
   pinMode(PIN_SERVO4, OUTPUT);
   pinMode(PIN_DC, OUTPUT);
 
-  // ensure all outputs start LOW
   digitalWrite(PIN_SERVO1, LOW);
   digitalWrite(PIN_SERVO2, LOW);
   digitalWrite(PIN_SERVO3, LOW);
@@ -249,7 +253,7 @@ void loop() {
 
   handleSerial();
 
-  // heartbeat every 5s
+  // heartbeat
   if (millis() - lastHeartbeat > HEARTBEAT_MS) {
     publishState();
     lastHeartbeat = millis();
