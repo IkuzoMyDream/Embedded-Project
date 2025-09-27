@@ -56,14 +56,10 @@ def _publish_next_pending(client):
 
 def _publish_pending_for_node(client, node_id):
     try:
-        # sort by id (queue_id) ASC for strict FIFO
-        if node_id == 1:
-            room_cond = "target_room=1"
-        else:
-            room_cond = "target_room IN (2,3)"
-        nxt = query(f"SELECT id, patient_id, target_room FROM queues WHERE status='pending' AND {room_cond} ORDER BY id ASC LIMIT 1")
+        # strict FIFO: เลือก pending id ต่ำสุดก่อน ไม่สน target_room หรือ node_id
+        nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
         if not nxt:
-            _logger.debug('No pending queue for node %s', node_id)
+            _logger.debug('No pending queue for any node')
             return
         q = nxt[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
@@ -73,6 +69,7 @@ def _publish_pending_for_node(client, node_id):
             'target_room': q['target_room'],
             'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
         }
+        # ส่งไปยัง node ที่ ready (node_id ที่เรียกฟังก์ชันนี้)
         topic = f"disp/cmd/{node_id}"
         client.publish(topic, json.dumps(payload), qos=1, retain=False)
         execute("UPDATE queues SET status='sent' WHERE id=?", (q['id'],))
