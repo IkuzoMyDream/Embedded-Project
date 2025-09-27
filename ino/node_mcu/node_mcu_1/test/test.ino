@@ -119,7 +119,8 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     return;
   }
 
-  StaticJsonDocument<MQTT_BUF> d;
+  // Use a compile-time constant size for StaticJsonDocument (ArduinoJson requires it)
+  StaticJsonDocument<512> d;
   DeserializationError err = deserializeJson(d, payload, len);
   if (err) { Serial.printf("[JSON] %s\n", err.c_str()); return; }
 
@@ -133,6 +134,13 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   publishAck(queueId, true);
   // Ensure DC is ON for the duration of this command (user requested)
   digitalWrite(PIN_DC, HIGH);
+  // Support short single-item payloads {"pill_id":x, "quantity":y}
+  if (d.containsKey("pill_id")) {
+    int pid = d["pill_id"] | -1;
+    int qty = d["quantity"] | 1;
+    Serial.printf("[node] Received single-item pill_id=%d qty=%d\n", pid, qty);
+    actuatePill(pid, qty);
+  }
   // if payload contains 'items' array, map pill_id -> servo pin and actuate
   if (d.containsKey("items")) {
     JsonArray items = d["items"].as<JsonArray>();
@@ -215,12 +223,7 @@ void setup() {
   Serial.begin(115200);
   delay(50);
   Serial.println("\n[node1] boot (test mode)");
-
-  wifiEnsure();
-  mqtt.setCallback(onMessage);
-  mqttEnsure();
-
-  // configure logic output pins
+  // configure logic output pins early so we drive outputs immediately when commands arrive
   pinMode(PIN_SERVO1, OUTPUT);
   pinMode(PIN_SERVO2, OUTPUT);
   pinMode(PIN_SERVO3, OUTPUT);
@@ -233,6 +236,10 @@ void setup() {
   digitalWrite(PIN_SERVO3, LOW);
   digitalWrite(PIN_SERVO4, LOW);
   digitalWrite(PIN_DC, LOW);
+
+  wifiEnsure();
+  mqtt.setCallback(onMessage);
+  mqttEnsure();
 }
 
 void loop() {
