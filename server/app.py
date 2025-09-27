@@ -316,6 +316,36 @@ def delete_pill(pid):
     execute("DELETE FROM pills WHERE id=?", (pid,))
     return jsonify({"ok": True})
 
+@app.post('/api/drugs')
+def update_drugs():
+    data = request.get_json(force=True)
+    drugs = data.get('drugs', [])
+    # ดึง id ทั้งหมดใน pills
+    old_pills = query('SELECT id, name FROM pills')
+    old_ids = {int(p['id']) for p in old_pills}
+    new_ids = set()
+    # อัปเดตหรือเพิ่มยาใหม่
+    for d in drugs:
+        pid = d.get('id')
+        name = d.get('name') or ''
+        type_ = (d.get('type') or '').strip().lower()
+        if type_ not in ('solid', 'liquid'):
+            type_ = 'solid'  # default ปลอดภัย
+        amount = int(d.get('quantity') or 0)
+        if pid is not None and str(pid).isdigit() and int(pid) in old_ids:
+            # update ถ้ามี id เดิม
+            execute('UPDATE pills SET name=?, type=?, amount=? WHERE id=?', (name, type_, amount, int(pid)))
+            new_ids.add(int(pid))
+        else:
+            # insert ถ้าไม่มี id
+            new_id = execute('INSERT INTO pills(name, type, amount) VALUES (?, ?, ?)', (name, type_, amount))
+            new_ids.add(int(new_id))
+    # ลบเฉพาะ id ที่ไม่มีใน drugs ใหม่
+    for old in old_pills:
+        if int(old['id']) not in new_ids:
+            execute('DELETE FROM pills WHERE id=?', (int(old['id']),))
+    return jsonify({'ok': True})
+
 
 if __name__ == "__main__":
     init_db()

@@ -53,7 +53,7 @@ export default function QueueManagement(){
     if(key.includes('success') || key.includes('done') || key.includes('served')) return <span className="sticker">✅ เสร็จสิ้น</span>
     if(key.includes('sent') || key.includes('sending')) return <span className="sticker">📤 ส่งแล้ว</span>
     if(key.includes('pending')) return <span className="sticker">⏳ รอ</span>
-    if(key.includes('processing')) return <span className="sticker">🔄 กำลังทำ</span>
+    if(key.includes('processing') || key.includes('in_progress')) return <span className="sticker">💊 กำลังจัดยา</span>
     if(key.includes('fail') || key.includes('error')) return <span className="sticker">❌ ล้มเหลว</span>
     return <span className="sticker">{s}</span>
   }
@@ -123,17 +123,28 @@ export default function QueueManagement(){
       </div>
     )
     // If item is null or undefined, show no data (compressed card, all cards)
-    if(!item) return (
-      <div className={cls} style={{minHeight: prominent ? 80 : 180,display:'flex',alignItems: prominent ? 'center' : 'flex-start',justifyContent: prominent ? 'center' : 'flex-start'}}>
-        {/* Card header style: bigger, bold, clearer, with underline and accent color */}
-        <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #1976d2', marginBottom:10, background:'#f5faff', borderRadius:'10px 10px 0 0'}}>
-          <div>
-            <div className="card-title" style={{fontSize:32, fontWeight:900, color:'#1565c0', letterSpacing:1.5, textShadow:'0 2px 8px #e3f2fd'}}>{title}</div>
+    if(!item) {
+      // ใช้ layout เดียวกับตอนมีข้อมูล แต่แสดง placeholder
+      return (
+        <div className={cls} style={{display:'flex', flexDirection:'column'}}>
+          <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #1976d2', marginBottom:10, background:'#f5faff', borderRadius:'10px 10px 0 0'}}>
+            <div>
+              <div className="card-title" style={{fontSize:32, fontWeight:900, color:'#1565c0', letterSpacing:1.5, textShadow:'0 2px 8px #e3f2fd'}}>{title}</div>
+            </div>
+          </div>
+          <div style={{display:'flex',alignItems:'flex-start',gap:12,justifyContent:'flex-start', marginTop:0, flex:'1 0 auto'}}>
+            <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
+              <div className="queue-number" style={{color: prominent ? 'var(--gov-blue)' : 'var(--gov-green)', fontSize:72, fontWeight:900, lineHeight:'1.1'}}>-</div>
+            </div>
+            <div style={{flex:1,textAlign:'left'}}>
+              <div style={{fontSize:18,fontWeight:800}}>ไม่พบข้อมูล</div>
+              <div className="muted" style={{marginTop:6}}>ห้อง: -</div>
+              <div style={{marginTop:10}}><span className="sticker">-</span></div>
+            </div>
           </div>
         </div>
-        <div style={{textAlign:'center',color:'#7b8b7b',width:'100%',marginTop: prominent ? 0 : 24}}><div className="muted">ไม่มีข้อมูล</div></div>
-      </div>
-    )
+      )
+    }
     const qnum = item.queue_number ?? item.queue_id ?? '-'
     const patient = item.patient_name ?? item.patient ?? '-'
     const room = item.room ?? item.room_name ?? '-'
