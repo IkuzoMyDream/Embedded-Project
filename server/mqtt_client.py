@@ -62,6 +62,11 @@ def _publish_pending_for_node(client, node_id):
             _logger.debug('No pending queue for any node')
             return
         q = nxt[0]
+        # atomic claim: update status only if still pending
+        updated = execute("UPDATE queues SET status='sent' WHERE id=? AND status='pending'", (q['id'],))
+        if not updated:
+            _logger.debug('Queue id=%s already claimed by another node, skipping', q['id'])
+            return
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
         payload = {
             'queue_id': q['id'],
@@ -69,10 +74,8 @@ def _publish_pending_for_node(client, node_id):
             'target_room': q['target_room'],
             'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
         }
-        # ส่งไปยัง node ที่ ready (node_id ที่เรียกฟังก์ชันนี้)
         topic = f"disp/cmd/{node_id}"
         client.publish(topic, json.dumps(payload), qos=1, retain=False)
-        execute("UPDATE queues SET status='sent' WHERE id=?", (q['id'],))
         _logger.info('Published pending queue %s to %s', q['id'], topic)
     except Exception as e:
         _logger.exception('Failed to publish pending for node %s: %s', node_id, e)
