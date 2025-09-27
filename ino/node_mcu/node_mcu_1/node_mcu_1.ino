@@ -21,9 +21,9 @@
 #include <ArduinoJson.h>
 
 // ======= USER CONFIG =======
-#define WIFI_SSID  "YOUR_WIFI_SSID"
-#define WIFI_PASS  "YOUR_WIFI_PASSWORD"
-#define MQTT_HOST  "10.0.0.10"     // Odroid IP
+#define WIFI_SSID  "HAZANO.my"
+#define WIFI_PASS  "winwinwin"
+#define MQTT_HOST  "172.20.10.2"     // Odroid IP
 #define MQTT_PORT  1883 
 
 static const int NODE_ID = 1;
@@ -49,6 +49,10 @@ WiFiClient wifi;
 PubSubClient mqtt(wifi);
 char clientId[48];
 uint32_t lastStateAt = 0;
+// node readiness state
+bool g_online = false;
+bool g_ready = false;
+uint32_t lastReadyPub = 0;
 
 // JSON/MQTT buffer
 const size_t MQTT_BUF = 512;
@@ -95,20 +99,31 @@ void publishEvtDone(int queueId, const char* status="success") {
   publishJson(T_EVT, d, false);
 }
 
-void publishState() {
+// publish retained online-only (keep a retained marker for presence)
+void publishOnlineRetained() {
   StaticJsonDocument<128> d;
   d["online"] = 1;
   d["uptime"] = (uint32_t)(millis()/1000);
   publishJson(T_STATE, d, /*retain=*/true);
 }
 
+// publish combined online+ready (non-retained by default) so server sees both together
+void publishStateCombined(bool retainCombined=false) {
+  StaticJsonDocument<128> d;
+  d["online"] = g_online ? 1 : 0;
+  d["ready"]  = g_ready ? 1 : 0;
+  d["uptime"] = (uint32_t)(millis()/1000);
+  publishJson(T_STATE, d, /*retain=*/retainCombined);
+}
+
 // publish ready flag (node is idle and can accept next queue)
 void publishReady(bool ready) {
-  StaticJsonDocument<128> d;
-  d[ready ? "ready" : "ready"] = ready ? 1 : 0;
-  d["uptime"] = (uint32_t)(millis()/1000);
-  // do not retain ready by default (server will act on event); keep online retained in publishState
-  publishJson(T_STATE, d, /*retain=*/false);
+  g_ready = ready;
+  // always update combined state non-retained so server reacts to current readiness
+  publishStateCombined(false);
+  if (ready) {
+    lastReadyPub = millis();
+  }
 }
 
 void mqttEnsure() {
@@ -122,8 +137,10 @@ void mqttEnsure() {
   if (mqtt.connect(clientId)) {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);  // QoS1 for commands
-    publishState();                    // retained heartbeat
-    // announce ready to accept work
+    // announce presence: retained online marker
+    g_online = true;
+    publishOnlineRetained();
+    // announce ready to accept work and start repeated ready broadcasts
     publishReady(true);
   } else {
     Serial.printf("fail rc=%d\n", mqtt.state());
@@ -173,20 +190,20 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     publishEvtDone(queueId, ok ? "success" : "failed");
     // short pause then announce ready
     delay(500);
-    publishReady(true);
+    //publishReady(true);
 
   } else if (!strcmp(op, "dc")) {
     int on = d["on"] | 0;
     setDcEnable(on != 0);
     publishEvtDone(queueId, "success");
     delay(500);
-    publishReady(true);
+    //publishReady(true);
 
   } else {
     // ops 'step' and 'pump' are not for node 1; ignore gracefully
     publishEvtDone(queueId, "success");
     delay(500);
-    publishReady(true);
+    //publishReady(true);
   }
 }
 
@@ -213,132 +230,17 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) wifiEnsure();
   if (!mqtt.connected()) mqttEnsure();
   mqtt.loop();
-
+  // periodic retained online heartbeat (less frequent)
   if (millis() - lastStateAt > STATE_PERIOD_MS) {
     lastStateAt = millis();
-    publishState();
+    publishOnlineRetained();
+  }
+
+  // while ready, keep broadcasting combined online+ready more often so server sees the node
+  const uint32_t READY_BROADCAST_MS = 2000;
+  if (g_ready && (millis() - lastReadyPub > READY_BROADCAST_MS)) {
+    lastReadyPub = millis();
+    publishStateCombined(false);
   }
   delay(1);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// // ----- ESP8266 + PubSubClient (JSON ACK for Flask) -----
-// #include <ESP8266WiFi.h>
-// #include <PubSubClient.h>
-
-// // ---- WiFi ----
-// const char* WIFI_SSID = "ao";
-// const char* WIFI_PASS = "12345678zz";
-
-// // ---- MQTT broker on Odroid ----
-// const char* MQTT_HOST = "10.238.101.224";   // Odroid IP
-// const uint16_t MQTT_PORT = 1883;
-
-// // ---- Topics (match Flask .env / defaults) ----
-// const char* TOPIC_CMD = "dispense/queue/cmd";
-// const char* TOPIC_ACK = "dispense/queue/ack";
-
-// // ---- Globals ----
-// WiFiClient espClient;
-// PubSubClient mqtt(espClient);
-// char clientId[40];
-
-// // crude extractor for {"queue_id": N, ...}
-// int extractQueueId(const String& s) {
-//   int p = s.indexOf("\"queue_id\"");
-//   if (p < 0) return -1;
-//   p = s.indexOf(':', p);
-//   if (p < 0) return -1;
-//   // skip colon & spaces
-//   while (p < (int)s.length() && (s[p] == ':' || s[p] == ' ')) p++;
-//   int start = p;
-//   while (p < (int)s.length() && isDigit(s[p])) p++;
-//   return s.substring(start, p).toInt();
-// }
-
-// void onMessage(char* topic, byte* payload, unsigned int len) {
-//   String msg; msg.reserve(len);
-//   for (unsigned int i=0; i<len; ++i) msg += (char)payload[i];
-
-//   Serial.printf("[MQTT] %s %s\n", topic, msg.c_str());
-//   int qid = extractQueueId(msg);
-//   if (qid < 0) {
-//     Serial.println("[PARSE] queue_id not found");
-//     return;
-//   }
-
-//   // TODO: drive servo/conveyor here…
-//   delay(1000); // simulate work
-
-//   // Publish ACK JSON exactly as Flask expects
-//   String ack = String("{\"queue_id\":") + qid +
-//                ",\"status\":\"success\",\"device\":\"esp8266-1\"}";
-//   mqtt.publish(TOPIC_ACK, ack.c_str());
-//   Serial.printf("[MQTT] ACK -> %s\n", ack.c_str());
-// }
-
-// void ensureWifi() {
-//   if (WiFi.status() == WL_CONNECTED) return;
-//   WiFi.mode(WIFI_STA);
-//   WiFi.begin(WIFI_SSID, WIFI_PASS);
-//   Serial.print("WiFi connecting");
-//   int tries = 0;
-//   while (WiFi.status() != WL_CONNECTED) {
-//     delay(500);
-//     Serial.print(".");
-//     if (++tries > 60) { // 30s timeout
-//       Serial.println("\nWiFi retry");
-//       WiFi.disconnect(true);
-//       WiFi.begin(WIFI_SSID, WIFI_PASS);
-//       tries = 0;
-//     }
-//   }
-//   Serial.printf("\nWiFi OK %s\n", WiFi.localIP().toString().c_str());
-// }
-
-// void ensureMqtt() {
-//   if (mqtt.connected()) return;
-//   snprintf(clientId, sizeof(clientId), "esp8266-%06X", ESP.getChipId());
-//   Serial.print("MQTT connecting… ");
-//   // optional: increase buffer for larger JSON
-//   mqtt.setBufferSize(512);
-//   if (mqtt.connect(clientId)) {
-//     Serial.println("OK");
-//     mqtt.subscribe(TOPIC_CMD);
-//     Serial.printf("Subscribed: %s\n", TOPIC_CMD);
-//   } else {
-//     Serial.printf("fail rc=%d\n", mqtt.state());
-//   }
-// }
-
-// void setup() {
-//   Serial.begin(115200);
-//   delay(50);
-//   ensureWifi();
-//   mqtt.setServer(MQTT_HOST, MQTT_PORT);
-//   mqtt.setCallback(onMessage);
-//   ensureMqtt();
-// }
-
-// void loop() {
-//   if (WiFi.status() != WL_CONNECTED) ensureWifi();
-//   if (!mqtt.connected()) ensureMqtt();
-//   mqtt.loop();
-//   delay(10);
-// }

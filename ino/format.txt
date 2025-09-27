@@ -1,3 +1,10 @@
+- @nodemcu:first loop pub online&ready to odroid broker (, until it send disp/cmd , and will ack)
+- @odroid : after odroid received ready=1 state, odroid pub 1st queue where status = pending via payload to nodemcu
+- @nodemcu: set ready = 0; disp/ack then odroid server change queue.status = in_progress (from pending->in_progress) 
+- hardware process (this process ignore all disp/cmd from odroid) (ready=0)
+. . . (wait until patient pick the med from the box (detect with censor))
+- @nodemcu: pub disp/evt back to odroid & ready = 1
+
 # nodeId = {1,2}
 
 # Topics (nodeId is 1 or 2): use disp/cmd/{nodeId} to target a specific NodeMCU
@@ -23,9 +30,16 @@ disp/evt/{nodeId}    // Node → แจ้ง “งานจบ” สำหร
 
 disp/state/{nodeId}  // Node → heartbeat / readiness (health snapshot)
 *****************************************************************************************
-    # Preferred payload examples:
-    { "online": 1 }       // node is online (retained recommended)
-    { "ready": 1 }        // node is idle and ready to accept next pending queue
+        # Preferred payload examples (combined payload is recommended):
+        { "online": 1 }                     // node is online (retained recommended)
+        { "ready": 1 }                      // node is idle and ready to accept next pending queue
+        { "online":1, "ready":1 }         // combined: presence + readiness (preferred)
+
+        Notes:
+        - Node should repeatedly publish the combined {online, ready, uptime} while it remains ready.
+            This ensures the server sees the node as available even if a single ready event is missed.
+        - The retained "online" message is useful for UI presence. The combined messages should be
+            non-retained so the server treats them as live readiness events.
 
 Flow (recommended):
  1. Node boots and publishes disp/state/{nodeId} {"online":1} (retained)
