@@ -25,6 +25,15 @@ bool g_online = false;
 bool g_ready  = true;   // node starts ready
 int activeQueue = -1;   // store current queue id until evt done
 
+// ======= OUTPUT PINS (logic signals to Arduino) =======
+const int PIN_SERVO1 = D1; // GPIO5
+const int PIN_SERVO2 = D2; // GPIO4
+const int PIN_SERVO3 = D5; // GPIO14
+const int PIN_SERVO4 = D6; // GPIO12
+
+// pulse duration per dispense action (ms)
+const unsigned long PULSE_MS = 200;
+
 const size_t MQTT_BUF = 512;
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_MS = 5000;
@@ -72,6 +81,32 @@ void publishEvt(int queueId, int sensorVal) {
   publishJson(T_EVT, d, false);
 }
 
+// Map pill_id to servo output pin
+int pillIdToPin(int pill_id) {
+  switch (pill_id) {
+    case 1: return PIN_SERVO1;
+    case 2: return PIN_SERVO2;
+    case 3: return PIN_SERVO3;
+    case 4: return PIN_SERVO4;
+    default: return -1; // not handled
+  }
+}
+
+// Actuate pin for dispense: pulse HIGH then LOW. Quantity -> repeat pulses
+void actuatePill(int pill_id, int quantity) {
+  int pin = pillIdToPin(pill_id);
+  if (pin < 0) {
+    Serial.printf("[node] pill_id %d not mapped, skipping\n", pill_id);
+    return;
+  }
+  for (int i=0;i<max(1, quantity);++i) {
+    digitalWrite(pin, HIGH);
+    delay(PULSE_MS);
+    digitalWrite(pin, LOW);
+    delay(50);
+  }
+}
+
 // ======= MQTT CALLBACK =======
 void onMessage(char* topic, byte* payload, unsigned int len) {
   Serial.printf("[MQTT] %s | %u bytes\n", topic, len);
@@ -94,8 +129,32 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // Accept command
   publishAck(queueId, true);
+  // if payload contains 'items' array, map pill_id -> servo pin and actuate
+  if (d.containsKey("items")) {
+    JsonArray items = d["items"].as<JsonArray>();
+    Serial.printf("[node] Received items count=%u\n", items.size());
+    for (JsonObject it : items) {
+      int pid = it["pill_id"] | -1;
+      int qty = it["quantity"] | 1;
+      Serial.printf("[node] actuate pill_id=%d qty=%d\n", pid, qty);
+      actuatePill(pid, qty);
+    }
+  } else {
+    // fallback: older single-op command style {"op":"servo","id":N,"on":1}
+    const char* op = d["op"] | "";
+    if (op && strcmp(op, "") != 0) {
+      if (!strcmp(op, "servo")) {
+        int id = d["id"] | -1;
+        int on = d["on"] | 0;
+        if (id > 0 && on) {
+          actuatePill(id, 1);
+        }
+      }
+    }
+  }
+
   activeQueue = queueId;
-  g_ready = false;   // lock
+  g_ready = false;   // lock until sensor confirms
   publishState();
   Serial.printf("[node] Accepted queue=%d, waiting for sensor input...\n", queueId);
 }
