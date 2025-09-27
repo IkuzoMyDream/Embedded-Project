@@ -31,7 +31,8 @@ def on_connect(client, userdata, flags, rc, properties=None):
 
 def _publish_next_pending(client):
     try:
-        nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY created_at ASC LIMIT 1")
+        # sort by id (queue_id) ASC for strict FIFO
+        nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
         if not nxt:
             _logger.debug('No pending queue to publish')
             return
@@ -55,13 +56,12 @@ def _publish_next_pending(client):
 
 def _publish_pending_for_node(client, node_id):
     try:
-        # publish the next pending queue that targets rooms mapped to this node
-        # simple mapping: node1 -> room1, node2 -> room2/3
+        # sort by id (queue_id) ASC for strict FIFO
         if node_id == 1:
             room_cond = "target_room=1"
         else:
             room_cond = "target_room IN (2,3)"
-        nxt = query(f"SELECT id, patient_id, target_room FROM queues WHERE status='pending' AND {room_cond} ORDER BY created_at ASC LIMIT 1")
+        nxt = query(f"SELECT id, patient_id, target_room FROM queues WHERE status='pending' AND {room_cond} ORDER BY id ASC LIMIT 1")
         if not nxt:
             _logger.debug('No pending queue for node %s', node_id)
             return
