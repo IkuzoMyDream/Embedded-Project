@@ -9,6 +9,8 @@ _client = None
 
 # in-memory node readiness (node_id -> bool)
 _node_ready = {}
+# in-memory node online presence
+_node_online = {}
 
 
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -123,14 +125,17 @@ def on_message(client, userdata, msg):
                 # After EVT, give node a moment; when node reports ready it will trigger next
             return
 
-        # STATE: node readiness publish handled below (payload may be {} or {"ready":1})
+        # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')
         if 'ready' in payload or 'online' in payload:
-            # interpret ready / online
-            ready = int(payload.get('ready', payload.get('online', 0)))
+            # interpret online / ready separately
+            online = int(payload.get('online', 0))
+            ready = int(payload.get('ready', 0))
             if node_id is not None:
+                _node_online[node_id] = bool(online)
                 _node_ready[node_id] = bool(ready)
-                execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'ready': ready})))
-                _logger.info('Node %s reported ready=%s', node_id, ready)
+                # record both values in events for debugging/audit
+                execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
+                _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
                 if ready:
                     # publish next pending queue for this node
                     _publish_pending_for_node(client, node_id)
