@@ -17,7 +17,7 @@ void setStepDirectionRight() {
   Serial.println("[ACT] Stepper dir: RIGHT");
 }
 
-void triggerServo5() {
+void trigger  ervo5() {
   Serial.println("[ACT] Servo5 triggered");
 }
 void triggerServo6() {

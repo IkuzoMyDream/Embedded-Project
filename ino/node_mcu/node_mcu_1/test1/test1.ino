@@ -10,11 +10,11 @@
 
 static const int NODE_ID = 1;
 
-// MQTT Topics
-String T_CMD   = "disp/cmd/1";
-String T_ACK   = "disp/ack/1";
-String T_EVT   = "disp/evt/1";
-String T_STATE = "disp/state/1";
+// MQTT Topics (base topics)
+String T_CMD   = "disp/cmd";
+String T_ACK   = "disp/ack";
+String T_EVT   = "disp/evt";
+String T_STATE = "disp/state";
 
 // ======= GLOBALS =======
 WiFiClient wifi;
@@ -60,6 +60,7 @@ void publishAck(int queueId, bool accepted) {
   StaticJsonDocument<128> d;
   d["queue_id"] = queueId;
   d["accepted"] = accepted ? 1 : 0;
+  d["node_id"] = NODE_ID;
   publishJson(T_ACK, d, false);
 }
  
@@ -70,6 +71,7 @@ void publishEvt(int queueId, int sensorVal, const char* status="success") {
   d["done"]     = 1;
   d["status"]   = status;
   d["sensor"]   = sensorVal;
+  d["node_id"] = NODE_ID;
   publishJson(T_EVT, d, false);
 }
 
@@ -149,12 +151,16 @@ void mqttEnsure() {
   if (mqtt.connect(clientId)) {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);
+    mqtt.subscribe(T_EVT.c_str(), 1);
+    mqtt.subscribe(T_ACK.c_str(), 1);
+    mqtt.subscribe(T_STATE.c_str(), 1);
     g_online = true;
     // publish initial state
     StaticJsonDocument<128> s;
     s["online"] = 1;
     s["ready"] = 1;
     s["uptime"] = (uint32_t)(millis()/1000);
+    s["node_id"] = NODE_ID;
     publishJson(T_STATE, s, true); // retained
   } else {
     Serial.printf("fail rc=%d\n", mqtt.state());
