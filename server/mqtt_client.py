@@ -2,7 +2,7 @@ import json
 import logging
 import paho.mqtt.client as mqtt
 from .config import MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID, MQTT_TOPIC_ACK, MQTT_TOPIC_CMD, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE
-from .db import execute, query
+from .db import execute, query, get_conn
 
 _logger = logging.getLogger(__name__)
 _client = None
@@ -157,6 +157,19 @@ def on_message(client, userdata, msg):
                 # record both values in events for debugging/audit
                 execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
                 _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
+                # Sync logic: if one node reports ready and the peer is not ready, tell the peer to sync ready
+                other = 2 if node_id == 1 else 1
+                try:
+                    if _node_ready.get(node_id) and not _node_ready.get(other):
+                        sync_payload = {'sync': 1, 'from': node_id}
+                        client.publish(f'disp/evt/{other}', json.dumps(sync_payload), qos=1, retain=False)
+                        _logger.info('Sent sync disp/evt/%s to match node %s ready', other, node_id)
+                        # update in-memory state and record event for auditing
+                        _node_ready[other] = True
+                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync', json.dumps({'from': node_id, 'to': other})))
+                except Exception:
+                    _logger.exception('Failed to send sync evt to peer')
+
                 # If both nodes are ready, dispatch next pending queue to both (FIFO)
                 if _node_ready.get(1) and _node_ready.get(2):
                     nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
@@ -176,18 +189,26 @@ def on_message(client, userdata, msg):
                             'patient_id': q['patient_id'],
                             'target_room': q['target_room']
                         }
-                        # mark in_progress
-                        execute("UPDATE queues SET status=? WHERE id=?", ('in_progress', q['id']))
-                        # publish to both nodes
+                        # try to atomically reserve the queue (prevent race with other dispatchers)
                         try:
-                            client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
-                            client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
-                            _logger.info('Dispatched queue %s to nodes 1 and 2', q['id'])
+                            conn = get_conn()
+                            cur = conn.execute("UPDATE queues SET status='in_progress' WHERE id=? AND status='pending'", (q['id'],))
+                            conn.commit()
+                            # sqlite's cursor.rowcount indicates how many rows were changed
+                            if cur.rowcount and cur.rowcount > 0:
+                                try:
+                                    client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
+                                    client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
+                                    _logger.info('Reserved and dispatched queue %s to nodes 1 and 2', q['id'])
+                                except Exception:
+                                    _logger.exception('Failed to publish dispatch for queue %s', q['id'])
+                                # reserve nodes in-memory until they update ready
+                                _node_ready[1] = False
+                                _node_ready[2] = False
+                            else:
+                                _logger.info('Failed to reserve queue %s (already taken), skipping', q['id'])
                         except Exception:
-                            _logger.exception('Failed to dispatch queue %s to nodes', q['id'])
-                        # reserve nodes in-memory until they update ready
-                        _node_ready[1] = False
-                        _node_ready[2] = False
+                            _logger.exception('Error reserving queue %s', q['id'])
             return
 
         # Unknown payload: try to log with optional queue_id

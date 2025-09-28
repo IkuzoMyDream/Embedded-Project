@@ -87,10 +87,7 @@ void publishStateCombined(bool retainCombined);
 
 void onMessage(char* topic, byte* payload, unsigned int len) {
   Serial.printf("[MQTT] %s | %u bytes\n", topic, len);
-  if (!g_ready) {
-    Serial.println("[node] BUSY, ignoring cmd");
-    return;
-  }
+  // allow processing even if g_ready is false; server will sync readiness if needed
 
   DynamicJsonDocument d(JSON_CAP);
   DeserializationError err = deserializeJson(d, payload, len);
@@ -99,6 +96,18 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   int queueId = d["queue_id"] | -1;
   if (queueId < 0) {
     publishAck(queueId, false);
+    return;
+  }
+
+  // handle sync event from server/peer: {"sync":1, "from":<node>}
+  if (d.containsKey("sync") && int(d["sync"]) == 1) {
+    g_ready = true;
+    Serial.println("[node] sync received -> set ready=1");
+    // publish updated state so server sees us ready
+    StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 1; stn["uptime"] = (uint32_t)(millis()/1000);
+    publishJson(T_STATE, stn, false);
+    // acknowledge sync if queue_id present
+    if (queueId >= 0) publishAck(queueId, true);
     return;
   }
 
