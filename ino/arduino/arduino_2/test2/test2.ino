@@ -36,12 +36,19 @@ void setDcState(bool on) {
 const uint8_t PIN_SENSOR = 3; // change to your input pin
 bool lastSensorState = false;
 
+// Auto-done test mode: send "done" automatically after AUTO_DONE_MS (ms)
+const unsigned long AUTO_DONE_MS = 10UL * 1000UL; // 10 seconds (testing)
+bool autoDoneEnabled = true; // enable temporary auto-done for testing
+unsigned long startMillis = 0;
+bool autoDoneSent = false;
+
 void setup() {
   Serial.begin(9600);
   delay(200);
   Serial.println("Arduino2 actuator stub ready (sensor mode)");
   pinMode(PIN_SENSOR, INPUT_PULLUP); // assume sensor pulls LOW normally, HIGH when detected; change if needed
   lastSensorState = digitalRead(PIN_SENSOR);
+  startMillis = millis();
 }
 
 void processLine(const String &lineRaw) {
@@ -92,6 +99,13 @@ void loop() {
     Serial.println("1"); // optional numeric indicator
   }
   lastSensorState = cur;
+
+  // auto-done testing: send done once after configured interval
+  if (autoDoneEnabled && !autoDoneSent && (millis() - startMillis >= AUTO_DONE_MS)) {
+    Serial.println("done");
+    Serial.println("1");
+    autoDoneSent = true;
+  }
 
   delay(20); // small debounce / cooperative delay
 }
