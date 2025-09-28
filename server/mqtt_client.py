@@ -38,14 +38,22 @@ def _publish_next_pending(client):
             return
         q = nxt[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
-        payload = {
-            'queue_id': q['id'],
-            'patient_id': q['patient_id'],
-            'target_room': q['target_room'],
-            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
-        }
         # decide node id from target_room (default mapping)
         node_id = 1 if q['target_room'] == 1 else 2
+        # For node 1 send full items payload; node 2 only needs queue and target_room (triggers)
+        if node_id == 1:
+            payload = {
+                'queue_id': q['id'],
+                'patient_id': q['patient_id'],
+                'target_room': q['target_room'],
+                'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
+            }
+        else:
+            payload = {
+                'queue_id': q['id'],
+                'patient_id': q['patient_id'],
+                'target_room': q['target_room']
+            }
         topic = f"disp/cmd/{node_id}"
         client.publish(topic, json.dumps(payload), qos=1, retain=False)
         _logger.info('Published pending queue %s to %s', q['id'], topic)
@@ -62,12 +70,20 @@ def _publish_pending_for_node(client, node_id):
             return
         q = nxt[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
-        payload = {
-            'queue_id': q['id'],
-            'patient_id': q['patient_id'],
-            'target_room': q['target_room'],
-            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
-        }
+        # If node 1 then include items; node 2 only needs queue_id + target_room (it controls actuators)
+        if node_id == 1:
+            payload = {
+                'queue_id': q['id'],
+                'patient_id': q['patient_id'],
+                'target_room': q['target_room'],
+                'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
+            }
+        else:
+            payload = {
+                'queue_id': q['id'],
+                'patient_id': q['patient_id'],
+                'target_room': q['target_room']
+            }
         topic = f"disp/cmd/{node_id}"
         client.publish(topic, json.dumps(payload), qos=1, retain=False)
         _logger.info('Published pending queue %s to %s', q['id'], topic)
