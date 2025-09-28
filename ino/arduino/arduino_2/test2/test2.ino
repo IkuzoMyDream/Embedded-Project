@@ -36,11 +36,6 @@ void setDcState(bool on) {
 const uint8_t PIN_SENSOR = 3; // change to your input pin
 bool lastSensorState = false;
 
-// Auto-done test mode: send "done" automatically after AUTO_DONE_MS (ms)
-const unsigned long AUTO_DONE_MS = 10UL * 1000UL; // 10 seconds (testing)
-bool autoDoneEnabled = true; // enable temporary auto-done for testing
-unsigned long startMillis = 0;
-bool autoDoneSent = false;
 
 void setup() {
   Serial.begin(9600);
@@ -48,7 +43,6 @@ void setup() {
   Serial.println("Arduino2 actuator stub ready (sensor mode)");
   pinMode(PIN_SENSOR, INPUT_PULLUP); // assume sensor pulls LOW normally, HIGH when detected; change if needed
   lastSensorState = digitalRead(PIN_SENSOR);
-  startMillis = millis();
 }
 
 void processLine(const String &lineRaw) {
@@ -61,16 +55,23 @@ void processLine(const String &lineRaw) {
     char d = line.charAt(4);
     if (d == 'L' || d == 'l') setStepDirectionLeft();
     else setStepDirectionRight();
+  // any trigger from NodeMCU: actuate only (no auto-done timer)
   } else if (line.startsWith("SERVO5,")) {
     triggerServo5();
+  // actuate only (no auto-done timer)
   } else if (line.startsWith("SERVO6,")) {
     triggerServo6();
+  // actuate only (no auto-done timer)
   } else if (line.startsWith("PUMP,")) {
     int v = atoi(line.c_str() + 5);
     setPump(v != 0);
+  // actuate only (no auto-done timer)
   } else if (line.startsWith("DC,")) {
     int v = atoi(line.c_str() + 3);
     setDcState(v != 0);
+    // treat DC,1 as start-of-queue triggers from NodeMCU for node2
+    // DC command: actuate only; DC,0 does not change any auto-done timer behavior
+    (void)v; // v used above
   } else {
     // unknown line: echo back so NodeMCU can parse sensor values if needed
     Serial.println(line);
@@ -100,12 +101,6 @@ void loop() {
   }
   lastSensorState = cur;
 
-  // auto-done testing: send done once after configured interval
-  if (autoDoneEnabled && !autoDoneSent && (millis() - startMillis >= AUTO_DONE_MS)) {
-    Serial.println("done");
-    Serial.println("1");
-    autoDoneSent = true;
-  }
 
   delay(20); // small debounce / cooperative delay
 }

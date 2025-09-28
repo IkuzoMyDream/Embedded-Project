@@ -126,13 +126,24 @@ def on_message(client, userdata, msg):
             if qid is None:
                 _logger.warning('EVT missing queue_id: %s', payload)
             else:
-                if st in ('success', 'ok'):
-                    execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
-                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done', json.dumps(payload)))
+                # Only node2's done is considered final for the pipeline
+                if node_id == 2:
+                    if st in ('success', 'ok'):
+                        execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
+                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node2', json.dumps(payload)))
+                    else:
+                        execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
+                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_failed_node2', json.dumps(payload)))
+                    # notify node1 that node2 finished (both success and failed)
+                    notify_payload = {'queue_id': qid, 'done': 1, 'status': st, 'from': 2}
+                    try:
+                        client.publish('disp/evt/1', json.dumps(notify_payload), qos=1, retain=False)
+                        _logger.info('Published disp/evt/1 for queue %s from node2', qid)
+                    except Exception:
+                        _logger.exception('Failed to publish disp/evt/1 for queue %s', qid)
                 else:
-                    execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
-                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_failed', json.dumps(payload)))
-                # After EVT, give node a moment; when node reports ready it will trigger next
+                    # node1's done is recorded for audit but not final
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
             return
 
         # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')
@@ -146,9 +157,37 @@ def on_message(client, userdata, msg):
                 # record both values in events for debugging/audit
                 execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
                 _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
-                if ready:
-                    # publish next pending queue for this node
-                    _publish_pending_for_node(client, node_id)
+                # If both nodes are ready, dispatch next pending queue to both (FIFO)
+                if _node_ready.get(1) and _node_ready.get(2):
+                    nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
+                    if not nxt:
+                        _logger.debug('No pending queue to dispatch')
+                    else:
+                        q = nxt[0]
+                        items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
+                        payload1 = {
+                            'queue_id': q['id'],
+                            'patient_id': q['patient_id'],
+                            'target_room': q['target_room'],
+                            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
+                        }
+                        payload2 = {
+                            'queue_id': q['id'],
+                            'patient_id': q['patient_id'],
+                            'target_room': q['target_room']
+                        }
+                        # mark in_progress
+                        execute("UPDATE queues SET status=? WHERE id=?", ('in_progress', q['id']))
+                        # publish to both nodes
+                        try:
+                            client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
+                            client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
+                            _logger.info('Dispatched queue %s to nodes 1 and 2', q['id'])
+                        except Exception:
+                            _logger.exception('Failed to dispatch queue %s to nodes', q['id'])
+                        # reserve nodes in-memory until they update ready
+                        _node_ready[1] = False
+                        _node_ready[2] = False
             return
 
         # Unknown payload: try to log with optional queue_id

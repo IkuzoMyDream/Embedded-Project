@@ -190,7 +190,7 @@ void processSerialLine(const String &line) {
   String s = line;
   s.trim();
   if (s.length() == 0) return;
-  Serial.printf("[SERIAL RX] %s\n", s.c_str());
+  //Serial.printf("[SERIAL RX] %s\n", s.c_str());
 
   // If Arduino reports "done" we mark queue done and publish event
   if (s.equalsIgnoreCase("done")) {

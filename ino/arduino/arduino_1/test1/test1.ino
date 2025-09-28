@@ -76,8 +76,8 @@ void loop() {
       }
 
       buffer = "";
-    }   
-  } else {
+    }else {
       buffer += c;
-    }
+    }   
+  } 
   } 

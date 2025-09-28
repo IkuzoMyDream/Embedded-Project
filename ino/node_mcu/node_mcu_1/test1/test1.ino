@@ -62,7 +62,7 @@ void publishAck(int queueId, bool accepted) {
   d["accepted"] = accepted ? 1 : 0;
   publishJson(T_ACK, d, false);
 }
-
+ 
 // publish event with optional status ("success" or "failed")
 void publishEvt(int queueId, int sensorVal, const char* status="success") {
   StaticJsonDocument<160> d;
