@@ -94,7 +94,6 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
                         conn.commit()
                         # mark node ready and attempt dispatch next
                         _node_ready[node_id] = True
-                        global _client
                         if _client:
                             try:
                                 _logger.info('Triggering dispatch after verification-failed for queue %s', qid)
@@ -159,7 +158,6 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
         # -> mark _node_ready[1] = True, _node_ready[2] = True (done above)
         # -> trigger _dispatch_next_queue again
         if node1_done and node2_done and _check_both_nodes_ready():
-            global _client
             if _client:
                 _logger.info('Both nodes completed queue %s - triggering next dispatch', qid)
                 _dispatch_next_queue(_client)
