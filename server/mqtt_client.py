@@ -16,7 +16,9 @@ _node_online = {}
 
 def on_connect(client, userdata, flags, rc, properties=None):
     try:
+        _logger.info('MQTT connected with result code %s', rc)
         # subscribe to ack/evt/state topics (wildcards expected)
+        _logger.info('Subscribing to topics: %s, %s, %s', MQTT_TOPIC_ACK, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE)
         client.subscribe(MQTT_TOPIC_ACK)
         try:
             client.subscribe(MQTT_TOPIC_EVT)
@@ -26,6 +28,7 @@ def on_connect(client, userdata, flags, rc, properties=None):
             client.subscribe(MQTT_TOPIC_STATE)
         except Exception:
             pass
+        _logger.info('Successfully subscribed to MQTT topics')
     except Exception as e:
         _logger.exception('subscribe failed: %s', e)
 
@@ -100,6 +103,7 @@ def _dispatch_next_queue(client):
 
 def on_message(client, userdata, msg):
     try:
+        _logger.info('MQTT message received - Topic: %s, Payload: %s', msg.topic, msg.payload.decode())
         payload = json.loads(msg.payload.decode())
         topic = msg.topic
         # try to extract node id from topic suffix (disp/ack/{nodeId}, disp/evt/{nodeId}, disp/state/{nodeId})
@@ -212,6 +216,13 @@ def get_client():
         c.loop_start()
         _client = c
         _logger.info('Connected to MQTT broker %s:%s', MQTT_BROKER, MQTT_PORT)
+        
+        # Test publish to see if MQTT is working
+        import time
+        time.sleep(1)  # Wait for connection to stabilize
+        c.publish('test/server', 'Server started', qos=1)
+        _logger.info('Sent test message to test/server')
+        
         return _client
     except Exception as e:
         _logger.warning('Could not connect to MQTT broker %s:%s — proceeding without MQTT (%s)', MQTT_BROKER, MQTT_PORT, e)
