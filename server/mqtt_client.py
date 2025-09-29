@@ -38,14 +38,16 @@ def _check_both_nodes_ready():
 
 
 def _handle_node_completion_atomic(qid, node_id, status, payload):
-    """Handle node completion atomically to prevent race conditions"""
+    """Atomically update SQLite DB when a node finishes a queue"""
     conn = get_conn()
     try:
         # Use transaction to ensure atomicity
         conn.execute("BEGIN IMMEDIATE")  # Lock database immediately
         
-        # Check if this node already completed this queue (prevent duplicates)
+        # Insert event row "evt_done_node{node_id}" with payload JSON
         event_name = f'evt_done_node{node_id}'
+        
+        # Check if this node already completed this queue (prevent duplicates)
         existing = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event=?", (qid, event_name)).fetchone()
         if existing:
             _logger.warning('Node%s already completed queue %s, ignoring duplicate', node_id, qid)
@@ -62,7 +64,7 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
         else:
             _logger.info('Node%s completed processing for queue %s', node_id, qid)
         
-        # Check if both nodes have completed (within this transaction)
+        # Check if both node1 and node2 have done this queue (within this transaction)
         node1_done = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node1'", (qid,)).fetchone()
         node2_done = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node2'", (qid,)).fetchone()
         
@@ -74,13 +76,14 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
             try:
                 n1_msg = json.loads(node1_result[0]) if node1_result else {}
                 n2_msg = json.loads(node2_result[0]) if node2_result else {}
-                n1_st = n1_msg.get('status', 'success').lower()  # Default to success instead of unknown
-                n2_st = n2_msg.get('status', 'success').lower()  # Default to success instead of unknown
+                n1_st = n1_msg.get('status', 'success').lower()
+                n2_st = n2_msg.get('status', 'success').lower()
             except Exception as e:
                 _logger.exception('Failed to parse node completion status: %s', e)
                 n1_st = n2_st = 'failed'  # Mark as failed on parse error
             
-            # Determine final status - success only if both success
+            # If both success: update queues.status='success' + served_at=NOW
+            # If one failed or timeout: update queues.status='failed'
             if n1_st == 'success' and n2_st == 'success':
                 conn.execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
                 _logger.info('Queue %s completed successfully by both nodes', qid)
@@ -90,20 +93,22 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
                 _logger.warning('Queue %s FAILED - changing status to failed. Reason: %s', qid, failure_reason)
                 conn.execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
                 conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'queue_failed', failure_reason))
-            
-            # Mark both nodes as ready for next queue
-            _node_ready[1] = True
-            _node_ready[2] = True
-            _logger.info('Both nodes marked ready after queue %s completion', qid)
         
         # Commit transaction
         conn.commit()
         
-        # Try to dispatch next queue if both nodes are ready (outside transaction)
+        # After commit: mark in-memory _node_ready[node_id] = True
+        _node_ready[node_id] = True
+        _logger.info('Node%s marked ready after completing queue %s', node_id, qid)
+        
+        # 3. When both nodes send evt_done (success):
+        # -> update queue.status = 'success', served_at=NOW (done above)
+        # -> mark _node_ready[1] = True, _node_ready[2] = True (done above)
+        # -> trigger _dispatch_next_queue again
         if node1_done and node2_done and _check_both_nodes_ready():
-            # Get global client reference
             global _client
             if _client:
+                _logger.info('Both nodes completed queue %s - triggering next dispatch', qid)
                 _dispatch_next_queue(_client)
             
     except Exception as e:
@@ -114,49 +119,79 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
 
 
 def _dispatch_next_queue(client):
-    """Dispatch next pending queue to both nodes simultaneously (FIFO strict)"""
+    """Dispatcher for MQTT-based queue system with strict FIFO and single in_progress rule"""
     try:
-        _logger.info('_dispatch_next_queue called')
+        _logger.info('_dispatch_next_queue called - scanning DB directly')
         
-        # Check if both nodes are ready
+        # Always scan the queues table directly (not just memory flags)
+        # Rule: at most 1 queue can be in_progress at a time
+        # Priority order is strict FIFO (lowest queue.id first)
+        
+        # 1. If there is any queue with status='in_progress':
+        in_progress_queues = query("SELECT id, patient_id, target_room FROM queues WHERE status='in_progress' ORDER BY id ASC")
+        
+        if in_progress_queues:
+            # -> select the lowest-id in_progress queue
+            # -> monitor it until done (no new dispatch until it finishes)
+            active_queue = in_progress_queues[0]
+            _logger.info('Monitoring in_progress queue %s - no new dispatch until it finishes', active_queue['id'])
+            
+            # If there are multiple in_progress (should not happen but handle gracefully)
+            if len(in_progress_queues) > 1:
+                extra_ids = [str(q['id']) for q in in_progress_queues[1:]]
+                _logger.warning('Found multiple in_progress queues (should not happen): monitoring %s, extras: %s', 
+                               active_queue['id'], ', '.join(extra_ids))
+            
+            return False  # No new dispatch while monitoring
+        
+        # 2. If there are no in_progress queues:
+        # -> select the lowest-id pending queue (status='pending')
+        pending_queues = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
+        
+        if not pending_queues:
+            _logger.info('No pending queues to dispatch')
+            return False
+        
+        # Check if both nodes are ready before attempting dispatch
         if not _check_both_nodes_ready():
             _logger.info('Dispatch skipped - Nodes not both ready - Node1: %s, Node2: %s', 
                          _node_ready.get(1, False), _node_ready.get(2, False))
             return False
-        
-        # CRITICAL FIX: Check if there's already an active queue in_progress
-        active_queues = query("SELECT id FROM queues WHERE status='in_progress'")
-        if active_queues:
-            active_ids = [str(q['id']) for q in active_queues]
-            _logger.info('Dispatch skipped - Already have active queue(s) in_progress: %s', ', '.join(active_ids))
-            return False
             
-        # Get next pending queue (FIFO strict)
-        nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
-        if not nxt:
-            _logger.info('No pending queue to dispatch')
-            return False
-            
-        q = nxt[0]
+        q = pending_queues[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
         
-        # Atomically reserve the queue with additional safety check
+        # -> atomically UPDATE that queue to 'in_progress'
         conn = get_conn()
-        
-        # Double check: ensure no other in_progress exists and this queue is still pending
-        cur = conn.execute("""
-            UPDATE queues SET status='in_progress' 
-            WHERE id=? AND status='pending' 
-            AND NOT EXISTS (SELECT 1 FROM queues WHERE status='in_progress' AND id != ?)
-        """, (q['id'], q['id']))
-        conn.commit()
-        
-        if not cur.rowcount or cur.rowcount == 0:
-            _logger.warning('Failed to reserve queue %s (already taken or active queue exists)', q['id'])
-            conn.close()
-            return False
+        try:
+            # Handle transactions with BEGIN IMMEDIATE to prevent race
+            conn.execute("BEGIN IMMEDIATE")
             
-        # Prepare payloads for both nodes
+            # Atomic check: ensure no other in_progress exists and this queue is still pending
+            cur = conn.execute("""
+                UPDATE queues SET status='in_progress' 
+                WHERE id=? AND status='pending' 
+                AND NOT EXISTS (SELECT 1 FROM queues WHERE status='in_progress')
+            """, (q['id'],))
+            
+            if not cur.rowcount or cur.rowcount == 0:
+                _logger.warning('Failed to atomically reserve queue %s (already taken or another queue became in_progress)', q['id'])
+                conn.rollback()
+                return False
+                
+            conn.commit()
+            _logger.info('Successfully reserved queue %s for dispatch (FIFO strict)', q['id'])
+            
+        except Exception as e:
+            conn.rollback()
+            _logger.exception('Failed to reserve queue %s atomically: %s', q['id'], e)
+            return False
+        finally:
+            conn.close()
+            
+        # -> publish MQTT messages:
+        # - disp/cmd/1 (with full items)
+        # - disp/cmd/2 (with trigger only)
         payload1 = {
             'queue_id': q['id'],
             'patient_id': q['patient_id'], 
@@ -169,15 +204,15 @@ def _dispatch_next_queue(client):
             'target_room': q['target_room']
         }
         
-        # Dispatch to both nodes simultaneously 
+        # Publish to both nodes simultaneously 
         client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
         client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
         
-        # Mark both nodes as busy
+        # -> mark _node_ready[1] = False, _node_ready[2] = False
         _node_ready[1] = False
         _node_ready[2] = False
         
-        _logger.info('Successfully dispatched queue %s to both nodes', q['id'])
+        _logger.info('Successfully dispatched queue %s to both nodes (FIFO: lowest id first)', q['id'])
         return True
         
     except Exception as e:
