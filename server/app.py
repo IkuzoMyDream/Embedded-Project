@@ -246,17 +246,13 @@ def api_add_queue():
     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)",
             (qid, "created", json.dumps({"patient_id": patient_id, "items": enrich_items(norm_items)})))
 
-    # Do not publish immediately by default. Queue remains 'pending' until a node reports ready via disp/state/{nodeId}.
-    # However, if we already know a node for the target_room is ready (in-memory), try to publish immediately.
+    # Try to dispatch immediately if both nodes are ready
     try:
         client = mqtt_client.get_client()
-        node_id = 1 if target_room == 1 else 2
-        ready = getattr(mqtt_client, '_node_ready', {}).get(node_id, False)
-        if ready:
-            # publish pending for that node (this will pick the next pending queue for the node)
-            mqtt_client._publish_pending_for_node(client, node_id)
+        # Use centralized dispatch instead of per-node dispatch
+        mqtt_client._dispatch_next_queue(client)
     except Exception as e:
-        app.logger.exception('Failed to publish pending queue immediately: %s', e)
+        app.logger.exception('Failed to dispatch queue immediately: %s', e)
 
     # return queue_number และ updated pill amounts เพื่อให้ client อัปเดตสต็อกทันที
     qrow = query("SELECT queue_number FROM queues WHERE id=?", (qid,))
