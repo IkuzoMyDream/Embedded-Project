@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS queues(
   retry_count INTEGER NOT NULL DEFAULT 0, -- number of retry attempts
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   served_at DATETIME,
+  note TEXT, -- หมายเหตุ/ข้อผิดพลาด หรือข้อความจาก vision (nullable)
   failed_reason TEXT, -- reason for failure (timeout, node1:timeout, etc.)
   FOREIGN KEY(patient_id) REFERENCES patients(id),
   FOREIGN KEY(target_room) REFERENCES rooms(id)

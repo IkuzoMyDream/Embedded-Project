@@ -23,52 +23,44 @@ CORS(app)
 # configure logging to show debug messages in console
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 app.logger.setLevel(logging.DEBUG)
-# also set werkzeug logger to INFO or DEBUG if needed
 logging.getLogger('werkzeug').setLevel(logging.INFO)
 
 # ---- serve pages / react ----
 @app.route('/')
 def root():
-    # if react build exists serve index.html from build
     build_index = os.path.join(app.static_folder, 'index.html')
     if os.path.exists(build_index):
         return send_from_directory(app.static_folder, 'index.html')
-    # fallback to legacy pages
     return send_from_directory(os.path.join(os.path.dirname(__file__), '..', 'client', 'pages'), 'dashboard.html')
 
 @app.route('/<path:filename>')
 def serve_any(filename):
-    # serve built static assets first
     if os.path.exists(os.path.join(app.static_folder, filename)):
         return send_from_directory(app.static_folder, filename)
-    # serve legacy pages
     legacy_path = os.path.join(os.path.dirname(__file__), '..', 'client', 'pages')
     if os.path.exists(os.path.join(legacy_path, filename)):
         return send_from_directory(legacy_path, filename)
-    # fallback to index for client-side routing
     build_index = os.path.join(app.static_folder, 'index.html')
     if os.path.exists(build_index):
         return send_from_directory(app.static_folder, 'index.html')
     return ('Not Found', 404)
 
-# ---- API: basic reads ----
+# ---- API: dashboard ----
 @app.get("/api/dashboard")
 def api_dashboard():
-    # fetch all pending/sent queues ordered by creation (to determine current and next)
     pending = query("""
-      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
-      FROM queues q
-      JOIN patients p ON p.id=q.patient_id
-      JOIN rooms r ON r.id=q.target_room
-      WHERE q.status IN ('pending','sent','in_progress')
-      ORDER BY q.created_at ASC
+        SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.note AS note
+        FROM queues q
+        JOIN patients p ON p.id=q.patient_id
+        JOIN rooms r ON r.id=q.target_room
+        WHERE q.status IN ('pending','sent','in_progress')
+        ORDER BY q.created_at ASC
     """)
 
-    # --- เพิ่มเติม: ดึง queue_items ของ pending ทั้งหมด ---
     pending_ids = [q['queue_id'] for q in pending]
     items_by_queue = {}
     if pending_ids:
-        placeholders = ','.join(['?']*len(pending_ids))
+        placeholders = ','.join(['?'] * len(pending_ids))
         rows = query(f"""
             SELECT qi.queue_id, qi.pill_id, qi.quantity, p.name as pill_name
             FROM queue_items qi
@@ -77,61 +69,54 @@ def api_dashboard():
         """, tuple(pending_ids))
         for row in rows:
             qid = row['queue_id']
-            if qid not in items_by_queue:
-                items_by_queue[qid] = []
-            items_by_queue[qid].append({
+            items_by_queue.setdefault(qid, []).append({
                 'pill_id': row['pill_id'],
                 'name': row['pill_name'],
                 'quantity': row['quantity']
             })
-    # ใส่ items ให้แต่ละ pending
     for q in pending:
         q['items'] = items_by_queue.get(q['queue_id'], [])
 
     current = pending[0] if pending else None
     next_q = pending[1] if len(pending) > 1 else None
 
-    # previous = most recent successful queue (last served)
     prev = query("""
-      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
-      FROM queues q
-      JOIN patients p ON p.id=q.patient_id
-      JOIN rooms r ON r.id=q.target_room
-      WHERE q.status = 'success'
-      ORDER BY q.created_at DESC LIMIT 1
+        SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.note AS note
+        FROM queues q
+        JOIN patients p ON p.id=q.patient_id
+        JOIN rooms r ON r.id=q.target_room
+        WHERE q.status = 'success'
+        ORDER BY q.created_at DESC LIMIT 1
     """)
 
-    # currently processing queues
     processing = query("""
-      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status
-      FROM queues q
-      JOIN patients p ON p.id=q.patient_id
-      JOIN rooms r ON r.id=q.target_room
-      WHERE q.status IN ('processing','in_progress')
-      ORDER BY q.created_at ASC
+        SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.note AS note
+        FROM queues q
+        JOIN patients p ON p.id=q.patient_id
+        JOIN rooms r ON r.id=q.target_room
+        WHERE q.status IN ('processing','in_progress')
+        ORDER BY q.created_at ASC
     """)
 
-    # recent served (success) queues
     served = query("""
-      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.served_at
-      FROM queues q
-      JOIN patients p ON p.id=q.patient_id
-      JOIN rooms r ON r.id=q.target_room
-      WHERE q.status = 'success'
-      ORDER BY q.served_at DESC
-      LIMIT 10
+        SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, q.status, q.served_at, q.note AS note
+        FROM queues q
+        JOIN patients p ON p.id=q.patient_id
+        JOIN rooms r ON r.id=q.target_room
+        WHERE q.status = 'success'
+        ORDER BY q.served_at DESC
+        LIMIT 10
     """)
 
-    # failed queues for monitoring (simplified query without new columns)
     failed = query("""
-      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, 
-             q.status, q.created_at
-      FROM queues q
-      JOIN patients p ON p.id=q.patient_id
-      JOIN rooms r ON r.id=q.target_room
-      WHERE q.status = 'failed'
-      ORDER BY q.created_at DESC
-      LIMIT 10
+        SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room,
+               q.status, q.created_at, q.note AS note
+        FROM queues q
+        JOIN patients p ON p.id=q.patient_id
+        JOIN rooms r ON r.id=q.target_room
+        WHERE q.status = 'failed'
+        ORDER BY q.created_at DESC
+        LIMIT 10
     """)
 
     logs = query("SELECT id, queue_id, ts, event, message FROM events ORDER BY id DESC LIMIT 50")
@@ -298,6 +283,40 @@ def add_patient():
     d = request.get_json(force=True)
     pid = execute("INSERT INTO patients(name,note) VALUES(?,?)", (d["name"], d.get("note")))
     return jsonify({"id": pid})
+
+@app.patch("/api/queues/<int:qid>/note")
+def patch_queue_note(qid):
+    d = request.get_json(force=True)
+    note = d.get('note')
+    execute("UPDATE queues SET note=? WHERE id=?", (note, qid))
+    execute("INSERT INTO events(queue_id,event,message) VALUES(?,?,?)", (qid, 'note_updated', note or ''))
+    return jsonify({"ok": True, "queue_id": qid, "note": note})
+
+@app.post('/api/vision/current')
+def vision_update_current():
+    """Attach vision detection result to the currently in_progress queue.
+    Body JSON: {"count_detected": <int>}.
+    Logic: find lowest-id queue with status='in_progress'; compare detected with expected sum(quantity) in queue_items; update note.
+    """
+    data = request.get_json(force=True) or {}
+    try:
+        detected = int(data.get('count_detected'))
+    except Exception:
+        return jsonify({"error": "count_detected required int"}), 400
+    # find current in_progress queue
+    cur = query("SELECT id FROM queues WHERE status='in_progress' ORDER BY id ASC LIMIT 1")
+    if not cur:
+        return jsonify({"error": "no in_progress queue"}), 404
+    qid = cur[0]['id']
+    expected_row = query("SELECT COALESCE(SUM(quantity),0) AS total FROM queue_items WHERE queue_id=?", (qid,))
+    expected = expected_row[0]['total'] if expected_row else 0
+    if detected == expected:
+        note = f"ตรวจนับถูกต้อง {detected}/{expected}"
+    else:
+        note = f"จำนวนไม่ตรง {detected}/{expected}"
+    execute("UPDATE queues SET note=? WHERE id=?", (note, qid))
+    execute("INSERT INTO events(queue_id,event,message) VALUES(?,?,?)", (qid, 'vision_check', note))
+    return jsonify({"queue_id": qid, "expected": expected, "detected": detected, "note": note})
 
 @app.delete("/api/queues/<int:qid>")
 def del_queue(qid):

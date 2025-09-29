@@ -16,6 +16,9 @@ export default function DispenseManagement(){
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [modalMsg, setModalMsg] = useState('')
+  // คิวที่มียอดตรวจนับไม่ตรง (จาก vision) เพื่อแจ้งเตือนให้ติดต่อพยาบาล
+  const [mismatchQueues, setMismatchQueues] = useState([])
+  const [hideAlert, setHideAlert] = useState(false)
 
   useEffect(()=>{
     let mounted = true
@@ -34,6 +37,37 @@ export default function DispenseManagement(){
     }).finally(()=>{ if(mounted) setLoading(false) })
     return ()=>{ mounted = false }
   },[])
+
+  // Poll dashboard เพื่อตรวจคิวที่มี note ระบุว่า 'จำนวนไม่ตรง'
+  useEffect(()=>{
+    let cancelled = false
+    function poll(){
+      fetch('/api/dashboard').then(r=>r.json()).then(d=>{
+        if(cancelled) return
+        const all = []
+        if(d) {
+          if(d.current) all.push(d.current)
+          if(Array.isArray(d.pending)) all.push(...d.pending)
+          if(Array.isArray(d.processing)) all.push(...d.processing)
+          if(Array.isArray(d.served)) all.push(...d.served)
+        }
+        const map = {}
+        all.forEach(q=>{
+          if(q && q.note && /จำนวนไม่ตรง/.test(q.note)){
+            const key = q.queue_id || q.queue_number
+            map[key] = q
+          }
+        })
+        const list = Object.values(map).sort((a,b)=>parseInt(a.queue_number||0)-parseInt(b.queue_number||0))
+        setMismatchQueues(list)
+        // ถ้าไม่มี mismatch อีกแล้ว ให้เปิด alert อัตโนมัติในการเกิดครั้งหน้า
+        if(list.length === 0 && hideAlert) setHideAlert(false)
+      }).catch(()=>{})
+    }
+    poll()
+    const t = setInterval(poll, 5000)
+    return ()=>{ cancelled = true; clearInterval(t) }
+  },[hideAlert])
 
   function setQty(pillId, val){
     setQuantities(prev=>({ ...prev, [String(pillId)]: Math.max(0, parseInt(val)||0) }))
@@ -146,6 +180,22 @@ export default function DispenseManagement(){
             <div style={{fontSize:64,marginBottom:16}}>✅</div>
             <div style={{fontSize:22,fontWeight:700,marginBottom:8}}>{modalMsg}</div>
             <button className="btn" style={{marginTop:16}} onClick={()=>setShowModal(false)}>ปิด</button>
+          </div>
+        </div>
+      )}
+
+      {/* Alert สำหรับคิวที่จำนวนยาไม่ตรง */}
+      {mismatchQueues.length > 0 && !hideAlert && (
+        <div style={{background:'#ffebee', border:'1px solid #ef9a9a', color:'#b71c1c', padding:'14px 18px', borderRadius:10, marginBottom:20, position:'relative', boxShadow:'0 2px 8px rgba(183,28,28,0.15)'}}>
+          <button onClick={()=>setHideAlert(true)} title="ซ่อน" style={{position:'absolute', top:6, right:10, background:'transparent', border:'none', fontSize:20, color:'#c62828', cursor:'pointer', lineHeight:1}}>×</button>
+          <div style={{fontSize:18, fontWeight:800, display:'flex', alignItems:'center', gap:8}}>
+            <span style={{fontSize:24}}>⚠️</span> พบคิวที่จำนวนยาไม่ตรง กรุณาติดต่อพยาบาล
+          </div>
+          <div style={{marginTop:8, fontWeight:600, fontSize:16}}>
+            คิว: {mismatchQueues.map(q=>`#${q.queue_number}`).join(', ')}
+          </div>
+          <div style={{marginTop:6, fontSize:14, color:'#9e2a2a'}}>
+            หมายเหตุถูกตรวจพบจากระบบกล้อง (Vision) หากตรวจสอบแล้วถูกต้อง โปรดให้พยาบาลปรับปรุงสถานะ
           </div>
         </div>
       )}

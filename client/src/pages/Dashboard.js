@@ -115,6 +115,11 @@ export default function Dashboard(){
               <div style={{fontSize:18, fontWeight:700}}>{current ? current.patient_name : ''}</div>
               <div className="muted" style={{fontSize:15}}>{current ? `Room: ${current.room}` : ''}</div>
               <div className="muted" style={{fontSize:15}}>{current ? (current.status || '-') : ''}</div>
+              {current && current.note && (
+                <div style={{marginTop:6, fontSize:14, fontWeight:600, color: /ถูกต้อง/.test(current.note) ? '#1b5e20' : /ไม่ตรง/.test(current.note) ? '#b71c1c' : '#555'}}>
+                  หมายเหตุ: {current.note}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -239,6 +244,7 @@ export default function Dashboard(){
                   <th>ห้อง</th>
                   <th>รายการยา</th>
                   <th>สถานะ</th>
+                  <th>หมายเหตุ</th>
                   <th>เสร็จเมื่อ</th>
                 </tr>
               </thead>
@@ -256,7 +262,7 @@ export default function Dashboard(){
                     return na - nb
                   });
                   if (allQueues.length === 0) {
-                    return <tr><td colSpan={6} className="muted">ไม่มีรายการสั่งยา</td></tr>
+                    return <tr><td colSpan={7} className="muted">ไม่มีรายการสั่งยา</td></tr>
                   }
                   return allQueues.map(q => {
                     let rowStyle = {};
@@ -280,6 +286,7 @@ export default function Dashboard(){
                           )}
                         </td>
                         <td>{q.status || '-'}</td>
+                        <td style={{fontWeight:q.note?600:400, color: q.note ? (/ถูกต้อง/.test(q.note)? '#2e7d32' : /ไม่ตรง/.test(q.note)? '#c62828':'#555') : '#777'}}>{q.note || '-'}</td>
                         <td>{q.served_at || '-'}</td>
                       </tr>
                     )
