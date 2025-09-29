@@ -141,25 +141,58 @@ def on_message(client, userdata, msg):
                 # Both nodes work independently - record completion
                 if node_id == 1:
                     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
-                    _logger.info('Node1 completed processing for queue %s', qid)
+                    if st in ('timeout', 'failed'):
+                        _logger.warning('Node1 failed/timeout for queue %s: %s', qid, st)
+                    else:
+                        _logger.info('Node1 completed processing for queue %s', qid)
                 elif node_id == 2:
                     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node2', json.dumps(payload)))
-                    _logger.info('Node2 completed processing for queue %s', qid)
+                    if st in ('timeout', 'failed'):
+                        _logger.warning('Node2 failed/timeout for queue %s: %s', qid, st)
+                    else:
+                        _logger.info('Node2 completed processing for queue %s', qid)
                 
-                # Check if both nodes completed this queue
+                # Check if both nodes completed this queue (success, failed, or timeout)
                 node1_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node1'", (qid,))
                 node2_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node2'", (qid,))
                 
                 if node1_done and node2_done:
-                    # Both nodes completed - mark queue as success
-                    if st in ('success', 'ok'):
+                    # Both nodes completed - determine final status
+                    # Get both statuses to decide final result
+                    node1_status = query("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node1' ORDER BY id DESC LIMIT 1", (qid,))
+                    node2_status = query("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node2' ORDER BY id DESC LIMIT 1", (qid,))
+                    
+                    try:
+                        n1_msg = json.loads(node1_status[0]['message']) if node1_status else {}
+                        n2_msg = json.loads(node2_status[0]['message']) if node2_status else {}
+                        n1_st = n1_msg.get('status', 'unknown')
+                        n2_st = n2_msg.get('status', 'unknown')
+                    except:
+                        n1_st = n2_st = 'unknown'
+                    
+                    # Final status logic: success only if both success, otherwise failed
+                    if n1_st == 'success' and n2_st == 'success':
                         execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
                         _logger.info('Queue %s completed successfully by both nodes', qid)
                     else:
-                        execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
-                        _logger.warning('Queue %s failed: %s', qid, st)
+                        # Failed case: timeout, failed, or mixed results
+                        failure_reason = f"node1:{n1_st}, node2:{n2_st}"
+                        _logger.warning('Queue %s FAILED - changing status to failed. Reason: %s', qid, failure_reason)
+                        
+                        # Update queue status to 'failed'
+                        try:
+                            execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
+                            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'queue_failed', failure_reason))
+                            _logger.info('Successfully updated queue %s status to FAILED', qid)
+                        except Exception as e:
+                            _logger.exception('Failed to update queue %s to failed status: %s', qid, e)
                     
-                    # Try to dispatch next queue if both nodes are ready
+                    # Mark both nodes as ready regardless of success/failure
+                    _node_ready[1] = True
+                    _node_ready[2] = True
+                    _logger.info('Both nodes marked ready after queue %s completion', qid)
+                    
+                    # Try to dispatch next queue
                     _dispatch_next_queue(client)
             return
 

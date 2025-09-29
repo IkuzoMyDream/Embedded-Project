@@ -38,6 +38,10 @@ uint32_t lastReadyPub = 0;
 unsigned long lastHeartbeat = 0;
 const unsigned long HEARTBEAT_MS = 5000;
 
+// Timeout handling
+unsigned long cmdSentTime = 0;
+const unsigned long CMD_TIMEOUT_MS = 30000; // 30 seconds timeout
+
 String serialBuffer = "";
 
 void wifiEnsure() {
@@ -126,6 +130,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 0; stn["uptime"] = (uint32_t)(millis()/1000);
   publishJson(T_STATE, stn, false);
   activeQueue = queueId;
+  cmdSentTime = millis(); // Start timeout timer
 
   // Based on target_room, instruct Arduino: set stepper direction, trigger servos/pump
   // Direction: room 1 -> left (L), room 2/3 -> right (R)
@@ -202,9 +207,11 @@ void processSerialLine(const String &line) {
   // If Arduino reports "done" we mark queue done and publish event
   if (s.equalsIgnoreCase("done")) {
     if (activeQueue >= 0) {
+      Serial.printf("[node2] Arduino done for queue %d\n", activeQueue);
       publishEvt(activeQueue, 0, "success");
       g_ready = true;
       activeQueue = -1;
+      cmdSentTime = 0; // Clear timeout timer
       publishStateCombined(false);
     }
     return;
@@ -247,6 +254,16 @@ void loop() {
       // prevent runaway
       if (serialBuffer.length() > 200) serialBuffer = serialBuffer.substring(serialBuffer.length()-200);
     }
+  }
+
+  // Check for Arduino timeout
+  if (activeQueue >= 0 && cmdSentTime > 0 && millis() - cmdSentTime > CMD_TIMEOUT_MS) {
+    Serial.printf("[node2] Arduino timeout for queue %d after %d ms\n", activeQueue, CMD_TIMEOUT_MS);
+    publishEvt(activeQueue, 0, "timeout");
+    g_ready = true;
+    activeQueue = -1;
+    cmdSentTime = 0;
+    publishStateCombined(false);
   }
 
   // heartbeat: broadcast combined state periodically so server sees node presence/readiness

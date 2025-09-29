@@ -122,17 +122,32 @@ def api_dashboard():
       LIMIT 10
     """)
 
+    # failed queues for monitoring
+    failed = query("""
+      SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, 
+             q.status, q.retry_count, q.failed_reason, q.created_at
+      FROM queues q
+      JOIN patients p ON p.id=q.patient_id
+      JOIN rooms r ON r.id=q.target_room
+      WHERE q.status = 'failed'
+      ORDER BY q.created_at DESC
+      LIMIT 10
+    """)
+
     logs = query("SELECT id, queue_id, ts, event, message FROM events ORDER BY id DESC LIMIT 50")
     success_count = query("SELECT COUNT(*) AS cnt FROM queues WHERE status='success'")[0]["cnt"]
+    failed_count = query("SELECT COUNT(*) AS cnt FROM queues WHERE status='failed'")[0]["cnt"]
     return jsonify({
         "pending": pending,
         "processing": processing,
         "served": served,
+        "failed": failed,
         "previous": prev[0] if prev else None,
         "current": current,
         "next": next_q,
         "logs": logs,
-        "success_count": success_count
+        "success_count": success_count,
+        "failed_count": failed_count
     })
 
 @app.get("/api/lookup")

@@ -24,9 +24,11 @@ CREATE TABLE IF NOT EXISTS queues(
   patient_id INTEGER NOT NULL,
   target_room INTEGER NOT NULL,
   queue_number TEXT GENERATED ALWAYS AS (printf('%03d',id)) VIRTUAL, -- เช่น id=1 → "001"
-  status TEXT NOT NULL DEFAULT 'pending', -- pending|sent|success|failed
+  status TEXT NOT NULL DEFAULT 'pending', -- pending|sent|success|failed|timeout
+  retry_count INTEGER NOT NULL DEFAULT 0, -- number of retry attempts
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   served_at DATETIME,
+  failed_reason TEXT, -- reason for failure (timeout, node1:timeout, etc.)
   FOREIGN KEY(patient_id) REFERENCES patients(id),
   FOREIGN KEY(target_room) REFERENCES rooms(id)
 );
