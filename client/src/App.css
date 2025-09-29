@@ -76,3 +76,79 @@ table.dispense-table tr:hover td {
     transform: translateX(-100%);
   }
 }
+
+/* Card layout and no-data styles */
+.card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  padding: 12px;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.card.full { min-height: 220px; }
+.card.side { min-height: 160px; }
+.card:hover { transform: translateY(-4px); box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
+
+.card-header {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-radius: 10px 10px 0 0;
+}
+.card-title { font-size: 20px; font-weight: 900; color: #1565c0; }
+
+.queue-number { font-weight: 900; line-height: 1; }
+.sticker { background: #eef3fb; padding: 6px 10px; border-radius: 8px; font-weight: 700; display: inline-block; }
+
+/* Enhanced empty-state for cards - use class `no-data` inside a card or `.card.empty` on the card */
+.card.empty {
+  background: linear-gradient(180deg, #ffffff, #fbfcff);
+  border: 1px dashed rgba(21,101,192,0.08);
+  color: #6b7785;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card .no-data {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #7b8b7b;
+  font-size: 15px;
+  padding: 18px;
+  gap: 6px;
+  width: 100%;
+}
+.card .no-data .icon {
+  font-size: 36px;
+  opacity: 0.9;
+}
+.card .no-data .placeholder-meta { margin-top: 6px; font-size: 13px; color: #9aa4ad }
+
+/* Smaller empty card variant for compact lists */
+.card.empty.compact { min-height: 80px; padding: 10px }
+
+/* Make table empty rows look consistent */
+table tr td .no-data { padding: 10px 0 }
+
+/* Ensure card content area doesn't collapse when empty */
+.card > .content-placeholder { flex: 1 1 auto; display:flex; align-items:center; justify-content:center }
+
+/* Responsive tweaks */
+@media (max-width: 800px) {
+  .card.full { min-height: 180px; }
+  .card.side { min-height: 140px; }
+  .card .queue-number { font-size: 48px !important; }
+}
+
+@media (max-width: 480px) {
+  .card { padding: 10px; }
+  .card-title { font-size: 18px }
+}

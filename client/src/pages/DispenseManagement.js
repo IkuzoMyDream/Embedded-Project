@@ -126,6 +126,9 @@ export default function DispenseManagement(){
     })
   }
 
+  // Shared empty placeholder style for cards
+  const emptyBoxStyle = { display:'flex', alignItems:'center', justifyContent:'center', minHeight:80, color:'#7b8b7b', fontSize:16, padding:12 }
+
   return (
     <div className="container">
       {/* แสดง Role คนไข้ ใน nav ด้านขวาบน */}
@@ -157,11 +160,19 @@ export default function DispenseManagement(){
 
         <div className="row">
           <label>ผู้ป่วย</label>
-          <select value={patient} onChange={e=>setPatient(e.target.value)}>
-            <option value="">-- เลือก --</option>
-            {lookup.patients.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
-          </select>
-          <div className="muted" style={{marginLeft:12}}>สถานะ: {loading? 'กำลังโหลด':''}</div>
+          { (lookup.patients && lookup.patients.length) ? (
+            <>
+              <select value={patient} onChange={e=>setPatient(e.target.value)}>
+                <option value="">-- เลือก --</option>
+                {lookup.patients.map(p=> <option key={p.id} value={String(p.id)}>{p.name}</option>)}
+              </select>
+              <div className="muted" style={{marginLeft:12}}>สถานะ: {loading? 'กำลังโหลด':''}</div>
+            </>
+          ) : (
+            <div style={{flex:1}}>
+              <div style={emptyBoxStyle}>ไม่มีผู้ป่วยในระบบ</div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -178,7 +189,7 @@ export default function DispenseManagement(){
             </tr>
           </thead>
           <tbody>
-            {lookup.pills.map(p=>{
+            { (lookup.pills && lookup.pills.length) ? lookup.pills.map(p=>{
               const pid = String(p.id)
               const stock = getStockFor(p)
               const reserved = getReserved(pid)
@@ -201,7 +212,13 @@ export default function DispenseManagement(){
                   </td>
                 </tr>
               )
-            })}
+            }) : (
+              <tr>
+                <td colSpan="5" style={{textAlign:'center', padding:20}}>
+                  <div style={emptyBoxStyle}>ไม่มีข้อมูลยาอยู่ในระบบ</div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -218,7 +235,7 @@ export default function DispenseManagement(){
             <tr><th>ยา</th><th>ประเภท</th><th className="right">สต็อกคงเหลือ</th><th className="right">จำนวนที่จ่าย</th><th>ลบ</th></tr>
           </thead>
           <tbody>
-            {items.map((it,idx)=> {
+            { (items && items.length) ? items.map((it,idx)=> {
               const p = lookup.pills.find(pp=>String(pp.id)===String(it.pill_id)) || {}
               const stock = getStockFor(p)
               const reservedBefore = items.slice(0,idx).filter(x=>String(x.pill_id)===String(it.pill_id)).reduce((s,i)=>s + (parseInt(i.quantity||0)), 0)
@@ -236,7 +253,13 @@ export default function DispenseManagement(){
                   </td>
                 </tr>
               )
-            })}
+            }) : (
+              <tr>
+                <td colSpan="5" style={{textAlign:'center', padding:20}}>
+                  <div style={emptyBoxStyle}>ยังไม่มีรายการยา</div>
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -250,7 +273,7 @@ export default function DispenseManagement(){
         </div>
         <div className="row" style={{justifyContent:'space-between', alignItems:'center'}}>
           <div>
-            <button className="btn" onClick={submit}>บันทึกคิว</button>
+            <button className="btn" onClick={submit} disabled={!patient || !(items && items.length)}>บันทึกคิว</button>
             <button className="btn secondary" style={{marginLeft:8}} onClick={()=>{setItems([]); setMsg('')}}>ล้าง</button>
           </div>
           <div className="muted">{msg}</div>

@@ -38,14 +38,33 @@ export default function QueueManagement(){
     previous = (data.previous || data.prev || data.prev_queue || []);
   }
   // Show up to 5 served as lastFinished (ใหม่สุด -> เก่าสุด)
-  const lastFinished = (data.served && data.served.length) ? data.served.slice(-5).reverse() : null
+  const lastFinished = (data.served && data.served.length) ? data.served.slice(-5).reverse() : []
+
+  // คำนวณรายการที่สถานะล้มเหลว (fail/error) จากทุกแหล่งข้อมูลที่อาจมี
+  const failed = (() => {
+    const all = [
+      ...(data.failed || []),
+      ...(data.processing || []),
+      ...(data.pending || []),
+      ...(data.served || [])
+    ];
+    // dedupe by queue_id or queue_number when possible
+    const uniq = [];
+    for (const it of all) {
+      if (!it) continue;
+      const id = it.queue_id ?? it.queue_number ?? JSON.stringify(it);
+      if (!uniq.find(x => (x.queue_id ?? x.queue_number ?? JSON.stringify(x)) === id)) uniq.push(it);
+    }
+    return uniq.filter(it => it && it.status && /fail|error/i.test(String(it.status))).slice(0,5);
+  })();
 
   useEffect(() => {
     console.log('data:', data);
     console.log('pending:', data.pending);
     console.log('processing:', data.processing);
     console.log('current:', current);
-  }, [data, current]);
+    console.log('failed:', failed);
+  }, [data, current, failed]);
 
   function renderStatus(s){
     if(!s) return <span className="sticker">ไม่ระบุ</span>
@@ -71,76 +90,115 @@ export default function QueueManagement(){
             </div>
           </div>
           <div style={{padding:8, width:'100%'}}>
-            {!hasData ? <div style={{color:'#7b8b7b',textAlign:'center',fontSize:20}}>ไม่มีคิวค้าง</div> : item.slice(0,5).map(it=> {
-              const qnum = it.queue_number ?? it.queue_id ?? '-';
-              const patient = it.patient_name ?? it.patient ?? '-';
-              const room = it.room ?? it.room_name ?? '-';
-              return (
-                <div key={it.queue_id} style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-start',padding:8,borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
-                  <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
-                    <div className="queue-number" style={{color:'var(--gov-green)', fontSize:56, fontWeight:900}}>{qnum}</div>
-                  </div>
-                  <div style={{flex:1,textAlign:'left'}}>
-                    <div style={{fontSize:18,fontWeight:800}}>{patient}</div>
-                    <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
-                    <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )
-    }
-    // กรณี card คิวที่เสร็จแล้ว (lastFinished) ให้ใช้ style และโครงสร้างเดียวกับคิวก่อนหน้า
-    if(title === "คิวที่เสร็จแล้ว" && Array.isArray(item)) return (
-      <div className={cls} style={{minHeight:180, display:'flex',flexDirection:'column',justifyContent:'center',alignItems: item.length === 0 ? 'center' : 'stretch'}}>
-        <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #1976d2', marginBottom:10, background:'#f5faff', borderRadius:'10px 10px 0 0'}}>
-          <div>
-            <div className="card-title" style={{fontSize:32, fontWeight:900, color:'#1565c0', letterSpacing:1.5, textShadow:'0 2px 8px #e3f2fd'}}>✅ {title}</div>
-          </div>
-        </div>
-        <div style={{padding:8, width:'100%'}}>
-          {item.length === 0 ? <div style={{color:'#7b8b7b',textAlign:'center',fontSize:20}}>ไม่มีคิวเสร็จ</div> : item.slice(0,5).map(it=> {
-            const qnum = it.queue_number ?? it.queue_id ?? '-';
-            const patient = it.patient_name ?? it.patient ?? '-';
-            const room = it.room ?? it.room_name ?? '-';
-            return (
-              <div key={it.queue_id} style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-start',padding:8,borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
-                <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
-                  <div className="queue-number" style={{color:'var(--gov-green)', fontSize:56, fontWeight:900}}>{qnum}</div>
-                </div>
-                <div style={{flex:1,textAlign:'left'}}>
-                  <div style={{fontSize:18,fontWeight:800}}>{patient}</div>
-                  <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
-                  <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
-                  {it.served_at && <div className="muted" style={{marginTop:6}}>{`เสร็จเมื่อ: ${it.served_at}`}</div>}
-                </div>
+            {!hasData ? (
+              <div className="no-data">
+                <div className="icon">📝</div>
+                <div>ไม่มีคิวค้าง</div>
               </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-    // If item is null or undefined, show no data (compressed card, all cards)
+            ) : item.slice(0,5).map(it=> {
+               const qnum = it.queue_number ?? it.queue_id ?? '-';
+               const patient = it.patient_name ?? it.patient ?? '-';
+               const room = it.room ?? it.room_name ?? '-';
+               return (
+                 <div key={it.queue_id} style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-start',padding:8,borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
+                   <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
+                     <div className="queue-number" style={{color:'var(--gov-green)', fontSize:56, fontWeight:900}}>{qnum}</div>
+                   </div>
+                   <div style={{flex:1,textAlign:'left'}}>
+                     <div style={{fontSize:18,fontWeight:800}}>{patient}</div>
+                     <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
+                     <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
+                   </div>
+                 </div>
+               )
+             })}
+           </div>
+         </div>
+       )
+     }
+     // กรณี card คิวที่เสร็จแล้ว (lastFinished) ให้ใช้ style และโครงสร้างเดียวกับคิวก่อนหน้า
+     if(title === "คิวที่เสร็จแล้ว" && Array.isArray(item)) return (
+       <div className={cls} style={{minHeight:180, display:'flex',flexDirection:'column',justifyContent:'center',alignItems: item.length === 0 ? 'center' : 'stretch'}}>
+         <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #1976d2', marginBottom:10, background:'#f5faff', borderRadius:'10px 10px 0 0'}}>
+           <div>
+             <div className="card-title" style={{fontSize:32, fontWeight:900, color:'#1565c0', letterSpacing:1.5, textShadow:'0 2px 8px #e3f2fd'}}>✅ {title}</div>
+           </div>
+         </div>
+         <div style={{padding:8, width:'100%'}}>
+           {item.length === 0 ? (
+             <div className="no-data">
+               <div className="icon">✅</div>
+               <div>ไม่มีคิวเสร็จ</div>
+             </div>
+           ) : item.slice(0,5).map(it=> {
+             const qnum = it.queue_number ?? it.queue_id ?? '-';
+             const patient = it.patient_name ?? it.patient ?? '-';
+             const room = it.room ?? it.room_name ?? '-';
+             return (
+               <div key={it.queue_id} style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-start',padding:8,borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
+                 <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
+                   <div className="queue-number" style={{color:'var(--gov-green)', fontSize:56, fontWeight:900}}>{qnum}</div>
+                 </div>
+                 <div style={{flex:1,textAlign:'left'}}>
+                   <div style={{fontSize:18,fontWeight:800}}>{patient}</div>
+                   <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
+                   <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
+                   {it.served_at && <div className="muted" style={{marginTop:6}}>{`เสร็จเมื่อ: ${it.served_at}`}</div>}
+                 </div>
+               </div>
+             )
+           })}
+         </div>
+       </div>
+     )
+     // กรณี card คิวล้มเหลว (failed)
+     if(title === "คิวล้มเหลว" && Array.isArray(item)) return (
+       <div className={cls} style={{minHeight:140, display:'flex',flexDirection:'column',justifyContent:'center',alignItems: item.length === 0 ? 'center' : 'stretch'}}>
+         <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #b71c1c', marginBottom:10, background:'#fff0f0', borderRadius:'10px 10px 0 0'}}>
+           <div>
+             <div className="card-title" style={{fontSize:28, fontWeight:900, color:'#b71c1c', letterSpacing:1.2}}>❌ {title}</div>
+           </div>
+         </div>
+         <div style={{padding:8, width:'100%'}}>
+           {item.length === 0 ? (
+             <div className="no-data">
+               <div className="icon">❌</div>
+               <div>ไม่มีรายการล้มเหลว</div>
+             </div>
+           ) : item.slice(0,5).map(it=> {
+             const qnum = it.queue_number ?? it.queue_id ?? '-';
+             const patient = it.patient_name ?? it.patient ?? '-';
+             const room = it.room ?? it.room_name ?? '-';
+             return (
+               <div key={it.queue_id} style={{display:'flex',alignItems:'center',gap:12,justifyContent:'flex-start',padding:8,borderBottom:'1px solid rgba(0,0,0,0.06)'}}>
+                 <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
+                   <div className="queue-number" style={{color:'#b71c1c', fontSize:48, fontWeight:900}}>{qnum}</div>
+                 </div>
+                 <div style={{flex:1,textAlign:'left'}}>
+                   <div style={{fontSize:16,fontWeight:800}}>{patient}</div>
+                   <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
+                   <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
+                   {it.detail && <div className="muted" style={{marginTop:6}}>{`รายละเอียด: ${it.detail}`}</div>}
+                 </div>
+               </div>
+             )
+           })}
+         </div>
+       </div>
+     )
+     // If item is null or undefined, show improved empty-state using CSS
     if(!item) {
-      // ใช้ layout เดียวกับตอนมีข้อมูล แต่แสดง placeholder
       return (
-        <div className={cls} style={{display:'flex', flexDirection:'column'}}>
+        <div className={`${cls} empty`}>
           <div className="card-header" style={{paddingBottom:10, borderBottom:'2.5px solid #1976d2', marginBottom:10, background:'#f5faff', borderRadius:'10px 10px 0 0'}}>
             <div>
               <div className="card-title" style={{fontSize:32, fontWeight:900, color:'#1565c0', letterSpacing:1.5, textShadow:'0 2px 8px #e3f2fd'}}>{title}</div>
             </div>
           </div>
-          <div style={{display:'flex',alignItems:'flex-start',gap:12,justifyContent:'flex-start', marginTop:0, flex:'1 0 auto'}}>
-            <div style={{flex:'0 0 auto', borderRight:'2px solid #e0e0e0', paddingRight:16, marginRight:16}}>
-              <div className="queue-number" style={{color: prominent ? 'var(--gov-blue)' : 'var(--gov-green)', fontSize:72, fontWeight:900, lineHeight:'1.1'}}>-</div>
-            </div>
-            <div style={{flex:1,textAlign:'left'}}>
-              <div style={{fontSize:18,fontWeight:800}}>ไม่พบข้อมูล</div>
-              <div className="muted" style={{marginTop:6}}>ห้อง: -</div>
-              <div style={{marginTop:10}}><span className="sticker">-</span></div>
-            </div>
+          <div className="no-data">
+            <div className="icon">ℹ️</div>
+            <div>ไม่พบข้อมูล</div>
+            <div className="placeholder-meta"></div>
           </div>
         </div>
       )
@@ -193,13 +251,19 @@ export default function QueueManagement(){
         </div>
       </div>
       <div style={{maxWidth:1200,margin:'0 auto',padding:12}}>
-        <Card item={current} title="คิวปัจจุบัน" prominent={true} />
-        <div style={{display:'flex',marginTop:12}}>
-          <div style={{flex:1,marginRight:12}}>
+        {/* แสดงเป็น 2x2 grid: Current | Previous  /  Finished | Failed */}
+        <div style={{display:'grid', gridTemplateColumns:'repeat(2, minmax(0,1fr))', gap:12}}>
+          <div style={{minWidth:0}}>
+            <Card item={current} title="คิวปัจจุบัน" prominent={true} />
+          </div>
+          <div style={{minWidth:0}}>
             <Card item={previous} title="คิวก่อนหน้า" />
           </div>
-          <div style={{flex:1}}>
+          <div style={{minWidth:0}}>
             <Card item={lastFinished} title="คิวที่เสร็จแล้ว" />
+          </div>
+          <div style={{minWidth:0}}>
+            <Card item={failed} title="คิวล้มเหลว" />
           </div>
         </div>
       </div>

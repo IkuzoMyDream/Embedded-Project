@@ -55,9 +55,61 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
             return
         
         # Record this node's completion event
-        conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", 
+        cur_evt = conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", 
                     (qid, event_name, json.dumps(payload)))
-        
+        inserted_evt_id = cur_evt.lastrowid
+
+        # Server-side verification: if payload includes 'detected', compare with DB expected total
+        try:
+            detected = None
+            if isinstance(payload, dict):
+                detected = payload.get('detected')
+            if detected is not None:
+                # get expected total from queue_items
+                row = conn.execute("SELECT SUM(quantity) as total FROM queue_items WHERE queue_id=?", (qid,)).fetchone()
+                expected_db = row[0] if row and row[0] is not None else 0
+                try:
+                    det_int = int(detected)
+                except Exception:
+                    det_int = None
+
+                if det_int is None or det_int < int(expected_db):
+                    _logger.warning('Server-side verification FAILED for queue %s node%s: detected=%s expected_db=%s', qid, node_id, detected, expected_db)
+                    # update the inserted evt message to reflect failed status so later aggregation sees it
+                    try:
+                        mod = dict(payload)
+                        mod['status'] = 'failed'
+                        mod['verification'] = {'expected_db': expected_db, 'detected': detected}
+                        conn.execute("UPDATE events SET message=? WHERE id=?", (json.dumps(mod), inserted_evt_id))
+                        # also insert separate verification event for audit
+                        conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'node_verification_failed', json.dumps({'node': node_id, 'detected': detected, 'expected_db': expected_db})))
+                        # reflect failure in local status variable so logs show fail
+                        status = 'failed'
+                        # Immediately mark queue as failed in DB and record reason
+                        reason = f'verification_failed_node{node_id}:detected={detected}:expected={expected_db}'
+                        conn.execute("UPDATE queues SET status=?, failed_reason=? WHERE id=?", ('failed', reason, qid))
+                        conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'queue_failed', reason))
+                        # commit now so queue state is persisted and we can dispatch next
+                        conn.commit()
+                        # mark node ready and attempt dispatch next
+                        _node_ready[node_id] = True
+                        global _client
+                        if _client:
+                            try:
+                                _logger.info('Triggering dispatch after verification-failed for queue %s', qid)
+                                _dispatch_next_queue(_client)
+                            except Exception as e:
+                                _logger.exception('Failed to trigger dispatch after verification failed: %s', e)
+                        # return early - this queue is failed and no need to wait for other node
+                        return
+                    except Exception as e:
+                        _logger.exception('Failed to update event after verification: %s', e)
+                else:
+                    # verification passed - add audit event
+                    conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'node_verification_pass', json.dumps({'node': node_id, 'detected': detected, 'expected_db': expected_db})))
+        except Exception as e:
+            _logger.exception('Server-side verification error: %s', e)
+
         # Log completion
         if status in ('timeout', 'failed'):
             _logger.warning('Node%s failed/timeout for queue %s: %s', node_id, qid, status)
