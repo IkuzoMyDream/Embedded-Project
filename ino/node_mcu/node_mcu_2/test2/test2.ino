@@ -132,6 +132,11 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   activeQueue = queueId;
   cmdSentTime = millis(); // Start timeout timer
 
+  // TEST: Add 5 second delay for Node 2
+  Serial.printf("[TEST] Node2 waiting 5 seconds for queue %d...\n", activeQueue);
+  delay(5000);
+  Serial.printf("[TEST] Node2 delay complete, processing queue %d\n", activeQueue);
+
   // Based on target_room, instruct Arduino: set stepper direction, trigger servos/pump
   // Direction: room 1 -> left (L), room 2/3 -> right (R)
   if (target_room == 1) {
@@ -151,10 +156,16 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   // always trigger DC after a disp command
   Serial.println("DC,1");
 
-  // Node2: this node does not forward pill/item CSVs — it only sends trigger
-  // commands to the Arduino (DIR, SERVO5/SERVO6, PUMP, DC). The Arduino
-  // performs the physical actions and will return "done" when finished.
-  Serial.printf("[node] sent triggers for queue %d target_room=%d\n", activeQueue, target_room);
+  // TEST: Simulate processing and send success immediately
+  Serial.printf("[TEST] Node2 simulating actuator control for queue %d target_room=%d\n", activeQueue, target_room);
+  
+  // TEST: Immediately send success after delay (don't wait for Arduino "done")
+  Serial.printf("[TEST] Node2 sending success for queue %d\n", activeQueue);
+  publishEvt(activeQueue, 1, "success");
+  g_ready = true;
+  activeQueue = -1;
+  cmdSentTime = 0;
+  publishStateCombined(false);
 }
 
 void mqttEnsure() {
@@ -271,4 +282,4 @@ void loop() {
     lastHeartbeat = millis();
     publishStateCombined(false);
   }
-}
+} 

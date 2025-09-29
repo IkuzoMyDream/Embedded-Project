@@ -37,14 +37,98 @@ def _check_both_nodes_ready():
     return _node_ready.get(1, False) and _node_ready.get(2, False)
 
 
+def _handle_node_completion_atomic(qid, node_id, status, payload):
+    """Handle node completion atomically to prevent race conditions"""
+    conn = get_conn()
+    try:
+        # Use transaction to ensure atomicity
+        conn.execute("BEGIN IMMEDIATE")  # Lock database immediately
+        
+        # Check if this node already completed this queue (prevent duplicates)
+        event_name = f'evt_done_node{node_id}'
+        existing = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event=?", (qid, event_name)).fetchone()
+        if existing:
+            _logger.warning('Node%s already completed queue %s, ignoring duplicate', node_id, qid)
+            conn.rollback()
+            return
+        
+        # Record this node's completion event
+        conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", 
+                    (qid, event_name, json.dumps(payload)))
+        
+        # Log completion
+        if status in ('timeout', 'failed'):
+            _logger.warning('Node%s failed/timeout for queue %s: %s', node_id, qid, status)
+        else:
+            _logger.info('Node%s completed processing for queue %s', node_id, qid)
+        
+        # Check if both nodes have completed (within this transaction)
+        node1_done = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node1'", (qid,)).fetchone()
+        node2_done = conn.execute("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node2'", (qid,)).fetchone()
+        
+        if node1_done and node2_done:
+            # Both nodes completed - get their statuses
+            node1_result = conn.execute("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node1' ORDER BY id DESC LIMIT 1", (qid,)).fetchone()
+            node2_result = conn.execute("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node2' ORDER BY id DESC LIMIT 1", (qid,)).fetchone()
+            
+            try:
+                n1_msg = json.loads(node1_result[0]) if node1_result else {}
+                n2_msg = json.loads(node2_result[0]) if node2_result else {}
+                n1_st = n1_msg.get('status', 'success').lower()  # Default to success instead of unknown
+                n2_st = n2_msg.get('status', 'success').lower()  # Default to success instead of unknown
+            except Exception as e:
+                _logger.exception('Failed to parse node completion status: %s', e)
+                n1_st = n2_st = 'failed'  # Mark as failed on parse error
+            
+            # Determine final status - success only if both success
+            if n1_st == 'success' and n2_st == 'success':
+                conn.execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
+                _logger.info('Queue %s completed successfully by both nodes', qid)
+            else:
+                # Failed case: timeout, failed, or mixed results
+                failure_reason = f"node1:{n1_st}, node2:{n2_st}"
+                _logger.warning('Queue %s FAILED - changing status to failed. Reason: %s', qid, failure_reason)
+                conn.execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
+                conn.execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'queue_failed', failure_reason))
+            
+            # Mark both nodes as ready for next queue
+            _node_ready[1] = True
+            _node_ready[2] = True
+            _logger.info('Both nodes marked ready after queue %s completion', qid)
+        
+        # Commit transaction
+        conn.commit()
+        
+        # Try to dispatch next queue if both nodes are ready (outside transaction)
+        if node1_done and node2_done and _check_both_nodes_ready():
+            # Get global client reference
+            global _client
+            if _client:
+                _dispatch_next_queue(_client)
+            
+    except Exception as e:
+        conn.rollback()
+        _logger.exception('Failed to handle node completion atomically: %s', e)
+    finally:
+        conn.close()
+
+
 def _dispatch_next_queue(client):
     """Dispatch next pending queue to both nodes simultaneously (FIFO strict)"""
     try:
         _logger.info('_dispatch_next_queue called')
+        
         # Check if both nodes are ready
         if not _check_both_nodes_ready():
             _logger.info('Dispatch skipped - Nodes not both ready - Node1: %s, Node2: %s', 
                          _node_ready.get(1, False), _node_ready.get(2, False))
+            return False
+        
+        # CRITICAL FIX: Check if there's already an active queue in_progress
+        active_queues = query("SELECT id FROM queues WHERE status='in_progress'")
+        if active_queues:
+            active_ids = [str(q['id']) for q in active_queues]
+            _logger.info('Dispatch skipped - Already have active queue(s) in_progress: %s', ', '.join(active_ids))
             return False
             
         # Get next pending queue (FIFO strict)
@@ -56,13 +140,20 @@ def _dispatch_next_queue(client):
         q = nxt[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
         
-        # Atomically reserve the queue
+        # Atomically reserve the queue with additional safety check
         conn = get_conn()
-        cur = conn.execute("UPDATE queues SET status='in_progress' WHERE id=? AND status='pending'", (q['id'],))
+        
+        # Double check: ensure no other in_progress exists and this queue is still pending
+        cur = conn.execute("""
+            UPDATE queues SET status='in_progress' 
+            WHERE id=? AND status='pending' 
+            AND NOT EXISTS (SELECT 1 FROM queues WHERE status='in_progress' AND id != ?)
+        """, (q['id'], q['id']))
         conn.commit()
         
         if not cur.rowcount or cur.rowcount == 0:
-            _logger.info('Failed to reserve queue %s (already taken), skipping', q['id'])
+            _logger.warning('Failed to reserve queue %s (already taken or active queue exists)', q['id'])
+            conn.close()
             return False
             
         # Prepare payloads for both nodes
@@ -94,7 +185,7 @@ def _dispatch_next_queue(client):
         return False
 
 
-# Removed _publish_pending_for_node - using centralized _dispatch_next_queue instead
+# centralized _dispatch_next_queue
 
 
 def on_message(client, userdata, msg):
@@ -138,62 +229,8 @@ def on_message(client, userdata, msg):
             if qid is None:
                 _logger.warning('EVT missing queue_id: %s', payload)
             else:
-                # Both nodes work independently - record completion
-                if node_id == 1:
-                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
-                    if st in ('timeout', 'failed'):
-                        _logger.warning('Node1 failed/timeout for queue %s: %s', qid, st)
-                    else:
-                        _logger.info('Node1 completed processing for queue %s', qid)
-                elif node_id == 2:
-                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node2', json.dumps(payload)))
-                    if st in ('timeout', 'failed'):
-                        _logger.warning('Node2 failed/timeout for queue %s: %s', qid, st)
-                    else:
-                        _logger.info('Node2 completed processing for queue %s', qid)
-                
-                # Check if both nodes completed this queue (success, failed, or timeout)
-                node1_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node1'", (qid,))
-                node2_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node2'", (qid,))
-                
-                if node1_done and node2_done:
-                    # Both nodes completed - determine final status
-                    # Get both statuses to decide final result
-                    node1_status = query("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node1' ORDER BY id DESC LIMIT 1", (qid,))
-                    node2_status = query("SELECT message FROM events WHERE queue_id=? AND event='evt_done_node2' ORDER BY id DESC LIMIT 1", (qid,))
-                    
-                    try:
-                        n1_msg = json.loads(node1_status[0]['message']) if node1_status else {}
-                        n2_msg = json.loads(node2_status[0]['message']) if node2_status else {}
-                        n1_st = n1_msg.get('status', 'unknown')
-                        n2_st = n2_msg.get('status', 'unknown')
-                    except:
-                        n1_st = n2_st = 'unknown'
-                    
-                    # Final status logic: success only if both success, otherwise failed
-                    if n1_st == 'success' and n2_st == 'success':
-                        execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
-                        _logger.info('Queue %s completed successfully by both nodes', qid)
-                    else:
-                        # Failed case: timeout, failed, or mixed results
-                        failure_reason = f"node1:{n1_st}, node2:{n2_st}"
-                        _logger.warning('Queue %s FAILED - changing status to failed. Reason: %s', qid, failure_reason)
-                        
-                        # Update queue status to 'failed'
-                        try:
-                            execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
-                            execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'queue_failed', failure_reason))
-                            _logger.info('Successfully updated queue %s status to FAILED', qid)
-                        except Exception as e:
-                            _logger.exception('Failed to update queue %s to failed status: %s', qid, e)
-                    
-                    # Mark both nodes as ready regardless of success/failure
-                    _node_ready[1] = True
-                    _node_ready[2] = True
-                    _logger.info('Both nodes marked ready after queue %s completion', qid)
-                    
-                    # Try to dispatch next queue
-                    _dispatch_next_queue(client)
+                # Use atomic transaction to prevent race conditions
+                _handle_node_completion_atomic(qid, node_id, st, payload)
             return
 
         # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')
@@ -212,8 +249,8 @@ def on_message(client, userdata, msg):
                 _logger.info('Current ready states - Node1: %s, Node2: %s', 
                            _node_ready.get(1, False), _node_ready.get(2, False))
 
-                # Try to dispatch next queue if both nodes are ready
-                _dispatch_next_queue(client)
+                # NOTE: Don't auto-dispatch here to prevent multiple in_progress queues
+                # Dispatch only happens after both nodes complete a queue
             return
 
         # Unknown payload: try to log with optional queue_id
@@ -256,6 +293,17 @@ def get_client():
         time.sleep(1)  # Wait for connection to stabilize
         c.publish('test/server', 'Server started', qos=1)
         _logger.info('Sent test message to test/server')
+        
+        # Initial dispatch attempt after server starts (if nodes become ready)
+        def delayed_initial_dispatch():
+            time.sleep(3)  # Wait for nodes to connect and report ready
+            try:
+                _dispatch_next_queue(c)
+            except Exception as e:
+                _logger.warning('Initial dispatch failed: %s', e)
+        
+        import threading
+        threading.Thread(target=delayed_initial_dispatch, daemon=True).start()
         
         return _client
     except Exception as e:

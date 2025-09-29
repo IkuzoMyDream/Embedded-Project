@@ -358,6 +358,34 @@ def update_drugs():
     return jsonify({'ok': True})
 
 
+# ---- DEBUG ENDPOINTS ----
+@app.post('/api/debug/dispatch')
+def debug_manual_dispatch():
+    """Manual dispatch trigger for debugging"""
+    try:
+        client = mqtt_client.get_client()
+        result = mqtt_client._dispatch_next_queue(client)
+        return jsonify({"dispatched": result, "message": "Manual dispatch attempted"})
+    except Exception as e:
+        app.logger.exception('Manual dispatch failed: %s', e)
+        return jsonify({"error": str(e)}), 500
+
+@app.get('/api/debug/status')
+def debug_system_status():
+    """Get system status for debugging"""
+    active_queues = query("SELECT id, status FROM queues WHERE status='in_progress'")
+    pending_queues = query("SELECT id, status FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 5")
+    recent_events = query("SELECT * FROM events ORDER BY id DESC LIMIT 10")
+    
+    return jsonify({
+        "active_queues": active_queues,
+        "pending_queues": pending_queues, 
+        "recent_events": recent_events,
+        "node_ready": getattr(mqtt_client, '_node_ready', {}),
+        "node_online": getattr(mqtt_client, '_node_online', {})
+    })
+
+
 if __name__ == "__main__":
     init_db()
     mqtt_client.get_client()

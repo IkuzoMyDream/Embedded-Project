@@ -122,7 +122,15 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   activeQueue = queueId;
   cmdSentTime = millis(); // Start timeout timer
 
-  // forward either items[] or single pill_id
+  // TEST: Add 3 second delay for Node 1
+  Serial.printf("[TEST] Node1 waiting 3 seconds for queue %d...\n", activeQueue);
+  delay(3000);
+  Serial.printf("[TEST] Node1 delay complete, processing queue %d\n", activeQueue);
+
+  // TEST: Simulate processing and send success immediately
+  Serial.printf("[TEST] Node1 simulating pill dispensing for queue %d\n", activeQueue);
+  
+  // Optional: Still forward to Arduino for logging (but don't wait for response)
   if (d.containsKey("items")) {
     JsonArray items = d["items"].as<JsonArray>();
     for (JsonObject it : items) {
@@ -138,6 +146,14 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Serial.printf("[node] forward single pill_id=%d qty=%d\n", pid, qty);
     forwardToArduino(activeQueue, pid, qty);
   }
+  
+  // TEST: Immediately send success after delay (don't wait for Arduino "done")
+  Serial.printf("[TEST] Node1 sending success for queue %d\n", activeQueue);
+  publishEvt(activeQueue, 1, "success");
+  g_ready = true;
+  activeQueue = -1;
+  cmdSentTime = 0;
+  publishStateCombined(false);
 }
 
 void mqttEnsure() {
