@@ -18,16 +18,12 @@ def on_connect(client, userdata, flags, rc, properties=None):
     try:
         _logger.info('MQTT connected with result code %s', rc)
         # subscribe to ack/evt/state topics (wildcards expected)
+        _logger.info('Raw topic values - ACK: "%s", EVT: "%s", STATE: "%s"', MQTT_TOPIC_ACK, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE)
         _logger.info('Subscribing to topics: %s, %s, %s', MQTT_TOPIC_ACK, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE)
-        client.subscribe(MQTT_TOPIC_ACK)
-        try:
-            client.subscribe(MQTT_TOPIC_EVT)
-        except Exception:
-            pass
-        try:
-            client.subscribe(MQTT_TOPIC_STATE)
-        except Exception:
-            pass
+        result_ack = client.subscribe(MQTT_TOPIC_ACK)
+        result_evt = client.subscribe(MQTT_TOPIC_EVT) 
+        result_state = client.subscribe(MQTT_TOPIC_STATE)
+        _logger.info('Subscribe results - ACK: %s, EVT: %s, STATE: %s', result_ack, result_evt, result_state)
         _logger.info('Successfully subscribed to MQTT topics')
     except Exception as e:
         _logger.exception('subscribe failed: %s', e)
@@ -109,11 +105,16 @@ def on_message(client, userdata, msg):
         # try to extract node id from topic suffix (disp/ack/{nodeId}, disp/evt/{nodeId}, disp/state/{nodeId})
         parts = topic.split('/')
         node_id = None
+        _logger.info('Topic parts: %s', parts)
         if len(parts) >= 3:
             try:
                 node_id = int(parts[-1])
-            except Exception:
+                _logger.info('Extracted node_id: %s', node_id)
+            except Exception as e:
+                _logger.warning('Failed to parse node_id from topic %s: %s', topic, e)
                 node_id = None
+        else:
+            _logger.warning('Topic %s does not have enough parts for node_id extraction', topic)
 
         # ACK: {"queue_id":..., "accepted":1}
         if 'accepted' in payload:
