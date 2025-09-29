@@ -3,7 +3,8 @@ import '../App.css'
 
 const API = {
   getDashboard: () => fetch('/api/dashboard').then(r=>r.json()),
-  getPills: () => fetch('/api/pills').then(r=>r.json())
+  getPills: () => fetch('/api/pills').then(r=>r.json()),
+  deleteQueue: (id) => fetch(`/api/queues/${id}`, { method: 'DELETE' })
 }
 
 export default function Dashboard(){
@@ -240,6 +241,7 @@ export default function Dashboard(){
                   <th>รายการยา</th>
                   <th>สถานะ</th>
                   <th>เสร็จเมื่อ</th>
+                  <th style={{width:110}}>การกระทำ</th>
                 </tr>
               </thead>
               <tbody>
@@ -256,7 +258,7 @@ export default function Dashboard(){
                     return na - nb
                   });
                   if (allQueues.length === 0) {
-                    return <tr><td colSpan={6} className="muted">ไม่มีรายการสั่งยา</td></tr>
+                    return <tr><td colSpan={7} className="muted">ไม่มีรายการสั่งยา</td></tr>
                   }
                   return allQueues.map(q => {
                     let rowStyle = {};
@@ -281,6 +283,27 @@ export default function Dashboard(){
                         </td>
                         <td>{q.status || '-'}</td>
                         <td>{q.served_at || '-'}</td>
+                        <td style={{textAlign:'center'}}>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`ยืนยันการลบคิว #${q.queue_number || q.queue_id}?`)) return;
+                              try {
+                                const res = await API.deleteQueue(q.queue_id);
+                                if (res.ok) {
+                                  alert('ลบคิวเรียบร้อย');
+                                  poll();
+                                } else {
+                                  const txt = await res.text();
+                                  alert('ลบไม่สำเร็จ: ' + txt);
+                                }
+                              } catch (e) {
+                                alert('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้');
+                              }
+                            }}
+                            disabled={q.status === 'in_progress'}
+                            style={{background:'#e53935', color:'#fff', border:'none', borderRadius:6, padding:'6px 12px', fontWeight:700, cursor: q.status === 'in_progress' ? 'not-allowed' : 'pointer'}}
+                          >ลบ</button>
+                        </td>
                       </tr>
                     )
                   })

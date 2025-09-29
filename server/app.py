@@ -301,7 +301,37 @@ def add_patient():
 
 @app.delete("/api/queues/<int:qid>")
 def del_queue(qid):
-    execute("DELETE FROM queues WHERE id=?", (qid,))
+    # Fetch queue and validate
+    rows = query("SELECT id, status FROM queues WHERE id=?", (qid,))
+    if not rows:
+        return jsonify({"error": "not found"}), 404
+    status = rows[0].get('status')
+
+    # Prevent accidental removal of actively processing queue
+    if status == 'in_progress':
+        return jsonify({"error": "cannot delete queue while in_progress"}), 400
+
+    # If queue exists and is pending/failed/success, attempt to restore pill stock
+    try:
+        items = query("SELECT pill_id, quantity FROM queue_items WHERE queue_id=?", (qid,))
+        for it in items:
+            try:
+                execute("UPDATE pills SET amount = amount + ? WHERE id=?", (it['quantity'], it['pill_id']))
+            except Exception as e:
+                app.logger.exception('Failed to restore pill amount for pill_id=%s from queue %s: %s', it.get('pill_id'), qid, e)
+    except Exception as e:
+        app.logger.exception('Failed to fetch queue_items for queue %s: %s', qid, e)
+
+    # Remove events, items and the queue itself
+    try:
+        execute("DELETE FROM events WHERE queue_id=?", (qid,))
+        execute("DELETE FROM queue_items WHERE queue_id=?", (qid,))
+        execute("DELETE FROM queues WHERE id=?", (qid,))
+        app.logger.info('Deleted queue %s and related records', qid)
+    except Exception as e:
+        app.logger.exception('Failed to delete queue %s: %s', qid, e)
+        return jsonify({"error": str(e)}), 500
+
     return jsonify({"ok": True})
 
 @app.get("/api/pills")
