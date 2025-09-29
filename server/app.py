@@ -122,10 +122,10 @@ def api_dashboard():
       LIMIT 10
     """)
 
-    # failed queues for monitoring
+    # failed queues for monitoring (simplified query without new columns)
     failed = query("""
       SELECT q.id AS queue_id, q.queue_number, p.name AS patient_name, r.name AS room, 
-             q.status, q.retry_count, q.failed_reason, q.created_at
+             q.status, q.created_at
       FROM queues q
       JOIN patients p ON p.id=q.patient_id
       JOIN rooms r ON r.id=q.target_room
