@@ -41,16 +41,17 @@ def _check_both_nodes_ready():
 def _dispatch_next_queue(client):
     """Dispatch next pending queue to both nodes simultaneously (FIFO strict)"""
     try:
+        _logger.info('_dispatch_next_queue called')
         # Check if both nodes are ready
         if not _check_both_nodes_ready():
-            _logger.debug('Nodes not both ready - Node1: %s, Node2: %s', 
+            _logger.info('Dispatch skipped - Nodes not both ready - Node1: %s, Node2: %s', 
                          _node_ready.get(1, False), _node_ready.get(2, False))
             return False
             
         # Get next pending queue (FIFO strict)
         nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
         if not nxt:
-            _logger.debug('No pending queue to dispatch')
+            _logger.info('No pending queue to dispatch')
             return False
             
         q = nxt[0]
@@ -168,6 +169,10 @@ def on_message(client, userdata, msg):
                 # record both values in events for debugging/audit
                 execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
                 _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
+                
+                # Debug: show current ready states
+                _logger.info('Current ready states - Node1: %s, Node2: %s', 
+                           _node_ready.get(1, False), _node_ready.get(2, False))
 
                 # Try to dispatch next queue if both nodes are ready
                 _dispatch_next_queue(client)
