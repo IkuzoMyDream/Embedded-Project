@@ -62,7 +62,7 @@ void publishAck(int queueId, bool accepted) {
   d["accepted"] = accepted ? 1 : 0;
   publishJson(T_ACK, d, false);
 }
- 
+  
 // publish event with optional status ("success" or "failed")
 void publishEvt(int queueId, int sensorVal, const char* status="success") {
   StaticJsonDocument<160> d;
@@ -97,28 +97,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   bool isEvt = (strstr(topic, "/evt/") != NULL);
 
   if (isEvt) {
-    // disp/evt messages are notifications from server/peer
-    // handle sync: {"sync":1}
-    if (d.containsKey("sync") && int(d["sync"]) == 1) {
-      g_ready = true;
-      Serial.println("[node] sync received -> set ready=1");
-      StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 1; stn["uptime"] = (uint32_t)(millis()/1000);
-      publishJson(T_STATE, stn, false);
-      int queueId = d["queue_id"] | -1;
-      if (queueId >= 0) publishAck(queueId, true);
-      return;
-    }
-    // handle done notifications from peer: {"queue_id":..., "done":1}
-    if (d.containsKey("done") && int(d["done"]) == 1) {
-      int qid = d["queue_id"] | -1;
-      Serial.printf("[node] peer done notify for queue %d\n", qid);
-      // mark ready and clear active queue if it matches
-      g_ready = true;
-      if (activeQueue == qid) activeQueue = -1;
-      publishStateCombined(false);
-      return;
-    }
-    // unknown evt: ignore
+    // evt messages are not used in independent mode - ignore all
     return;
   }
 
@@ -167,8 +146,7 @@ void mqttEnsure() {
   if (mqtt.connect(clientId)) {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);
-    // also listen to disp/evt/+ so we receive peer/server events and sync notifications
-    mqtt.subscribe("disp/evt/+", 1);
+    // independent mode - only listen to own command topic
     g_online = true;
     // publish initial state
     StaticJsonDocument<128> s;
@@ -198,10 +176,38 @@ void publishOnlineRetained() {
   publishJson(T_STATE, d, true);
 }
 
+String serialBuffer = "";
+
+void processSerialLine(const String &line) {
+  String s = line;
+  s.trim();
+  if (s.length() == 0) return;
+  
+  // If Arduino reports "done" we mark queue done and publish event
+  if (s.equalsIgnoreCase("done")) {
+    if (activeQueue >= 0) {
+      publishEvt(activeQueue, 0, "success");
+      g_ready = true;
+      activeQueue = -1;
+      publishStateCombined(false);
+      Serial.printf("[node1] Arduino done for queue %d\n", activeQueue);
+    }
+    return;
+  }
+  
+  // otherwise try parse numeric sensor value and forward as event
+  int val = atoi(s.c_str());
+  if (val != 0 || s == "0") {
+    if (activeQueue >= 0) {
+      publishEvt(activeQueue, val, "success");
+    }
+  }
+}
+
 void setup() {
   Serial.begin(9600);
   delay(500);
-  Serial.println("NodeMCU MQTT->Serial forwarder ready!");
+  Serial.println("NodeMCU MQTT->Serial forwarder ready! (node 1)");
 
   wifiEnsure();
   mqtt.setCallback(onMessage);
@@ -212,6 +218,21 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) wifiEnsure();
   if (!mqtt.connected()) mqttEnsure();
   mqtt.loop();
+
+  // read lines from Serial (Arduino) and process
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (serialBuffer.length() > 0) {
+        processSerialLine(serialBuffer);
+        serialBuffer = "";
+      }
+    } else {
+      serialBuffer += c;
+      // prevent runaway
+      if (serialBuffer.length() > 200) serialBuffer = serialBuffer.substring(serialBuffer.length()-200);
+    }
+  }
 
   // heartbeat: broadcast combined state periodically so server sees node presence/readiness
   if (millis() - lastHeartbeat > HEARTBEAT_MS) {

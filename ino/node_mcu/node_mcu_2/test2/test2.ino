@@ -106,23 +106,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   bool isEvt = (strstr(topic, "/evt/") != NULL);
 
   if (isEvt) {
-    if (d.containsKey("sync") && int(d["sync"]) == 1) {
-      g_ready = true;
-      Serial.println("[node2] sync received -> set ready=1");
-      StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 1; stn["uptime"] = (uint32_t)(millis()/1000);
-      publishJson(T_STATE, stn, false);
-      int queueId = d["queue_id"] | -1;
-      if (queueId >= 0) publishAck(queueId, true);
-      return;
-    }
-    if (d.containsKey("done") && int(d["done"]) == 1) {
-      int qid = d["queue_id"] | -1;
-      Serial.printf("[node2] peer done notify for queue %d\n", qid);
-      g_ready = true;
-      if (activeQueue == qid) activeQueue = -1;
-      publishStateCombined(false);
-      return;
-    }
+    // evt messages are not used in independent mode - ignore all
     return;
   }
 
@@ -179,8 +163,7 @@ void mqttEnsure() {
   if (mqtt.connect(clientId)) {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);
-    // also listen to disp/evt/+ so we receive peer/server events and sync notifications
-    mqtt.subscribe("disp/evt/+", 1);
+    // independent mode - only listen to own command topic
     g_online = true;
     // publish initial state
     StaticJsonDocument<128> s;

@@ -25,11 +25,15 @@ void setDcState(bool on) {
 }
 
 void actuatePill(int pid, int quantity) {
-  // Test stub: do not actuate servos here. User will implement actuation logic.
-  Serial.print("[stub] Received actuatePill pid="); Serial.print(pid);
+  // Test stub: simulate pill dispensing
+  Serial.print("[stub] Actuating pill_id="); Serial.print(pid);
   Serial.print(" qty="); Serial.println(quantity);
-
-  // Actuate logic here ...
+  
+  // Simulate processing time
+  delay(1000);
+  
+  // Signal completion to NodeMCU
+  Serial.println("done");
 }
 
 void setup() {

@@ -17,7 +17,7 @@ void setStepDirectionRight() {
   Serial.println("[ACT] Stepper dir: RIGHT");
 }
 
-void trigger  ervo5() {
+void triggerServo5() {
   Serial.println("[ACT] Servo5 triggered");
 }
 void triggerServo6() {
@@ -69,9 +69,13 @@ void processLine(const String &lineRaw) {
   } else if (line.startsWith("DC,")) {
     int v = atoi(line.c_str() + 3);
     setDcState(v != 0);
-    // treat DC,1 as start-of-queue triggers from NodeMCU for node2
-    // DC command: actuate only; DC,0 does not change any auto-done timer behavior
-    (void)v; // v used above
+    
+    // Test mode: DC,1 triggers simulation completion after delay
+    if (v == 1) {
+      Serial.println("[TEST] Starting actuator sequence...");
+      delay(2000); // simulate processing time
+      Serial.println("done");
+    }
   } else {
     // unknown line: echo back so NodeMCU can parse sensor values if needed
     Serial.println(line);

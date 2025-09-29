@@ -13,12 +13,6 @@ _node_ready = {}
 # in-memory node online presence
 _node_online = {}
 
-# pending sync offers: node_id -> expiry_timestamp
-_sync_offers = {}
-
-# seconds to wait for peer to confirm ready after sync
-SYNC_TIMEOUT = 3.0
-
 
 def on_connect(client, userdata, flags, rc, properties=None):
     try:
@@ -36,66 +30,71 @@ def on_connect(client, userdata, flags, rc, properties=None):
         _logger.exception('subscribe failed: %s', e)
 
 
-def _publish_next_pending(client):
-    try:
-        # sort by id (queue_id) ASC for strict FIFO
-        nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
-        if not nxt:
-            _logger.debug('No pending queue to publish')
-            return
-        q = nxt[0]
-        items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
-        # decide node id from target_room (default mapping)
-        node_id = 1 if q['target_room'] == 1 else 2
-        # For node 1 send full items payload; node 2 only needs queue and target_room (triggers)
-        if node_id == 1:
-            payload = {
-                'queue_id': q['id'],
-                'patient_id': q['patient_id'],
-                'target_room': q['target_room'],
-                'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
-            }
-        else:
-            payload = {
-                'queue_id': q['id'],
-                'patient_id': q['patient_id'],
-                'target_room': q['target_room']
-            }
-        topic = f"disp/cmd/{node_id}"
-        client.publish(topic, json.dumps(payload), qos=1, retain=False)
-        _logger.info('Published pending queue %s to %s', q['id'], topic)
-    except Exception as e:
-        _logger.exception('Failed to publish next pending queue: %s', e)
+# Removed _publish_next_pending - using centralized _dispatch_next_queue instead
 
 
-def _publish_pending_for_node(client, node_id):
+def _check_both_nodes_ready():
+    """Check if both nodes are ready for new commands"""
+    return _node_ready.get(1, False) and _node_ready.get(2, False)
+
+
+def _dispatch_next_queue(client):
+    """Dispatch next pending queue to both nodes simultaneously (FIFO strict)"""
     try:
-        # strict FIFO: เลือก pending id ต่ำสุดก่อน ไม่สน target_room หรือ node_id
+        # Check if both nodes are ready
+        if not _check_both_nodes_ready():
+            _logger.debug('Nodes not both ready - Node1: %s, Node2: %s', 
+                         _node_ready.get(1, False), _node_ready.get(2, False))
+            return False
+            
+        # Get next pending queue (FIFO strict)
         nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
         if not nxt:
-            _logger.debug('No pending queue for any node')
-            return
+            _logger.debug('No pending queue to dispatch')
+            return False
+            
         q = nxt[0]
         items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
-        # If node 1 then include items; node 2 only needs queue_id + target_room (it controls actuators)
-        if node_id == 1:
-            payload = {
-                'queue_id': q['id'],
-                'patient_id': q['patient_id'],
-                'target_room': q['target_room'],
-                'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
-            }
-        else:
-            payload = {
-                'queue_id': q['id'],
-                'patient_id': q['patient_id'],
-                'target_room': q['target_room']
-            }
-        topic = f"disp/cmd/{node_id}"
-        client.publish(topic, json.dumps(payload), qos=1, retain=False)
-        _logger.info('Published pending queue %s to %s', q['id'], topic)
+        
+        # Atomically reserve the queue
+        conn = get_conn()
+        cur = conn.execute("UPDATE queues SET status='in_progress' WHERE id=? AND status='pending'", (q['id'],))
+        conn.commit()
+        
+        if not cur.rowcount or cur.rowcount == 0:
+            _logger.info('Failed to reserve queue %s (already taken), skipping', q['id'])
+            return False
+            
+        # Prepare payloads for both nodes
+        payload1 = {
+            'queue_id': q['id'],
+            'patient_id': q['patient_id'], 
+            'target_room': q['target_room'],
+            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
+        }
+        payload2 = {
+            'queue_id': q['id'],
+            'patient_id': q['patient_id'],
+            'target_room': q['target_room']
+        }
+        
+        # Dispatch to both nodes simultaneously 
+        client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
+        client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
+        
+        # Mark both nodes as busy
+        _node_ready[1] = False
+        _node_ready[2] = False
+        
+        _logger.info('Successfully dispatched queue %s to both nodes', q['id'])
+        return True
+        
     except Exception as e:
-        _logger.exception('Failed to publish pending for node %s: %s', node_id, e)
+        _logger.exception('Failed to dispatch next queue: %s', e)
+        return False
+
+
+# Removed _publish_pending_for_node - using centralized _dispatch_next_queue instead
 
 
 def on_message(client, userdata, msg):
@@ -133,24 +132,29 @@ def on_message(client, userdata, msg):
             if qid is None:
                 _logger.warning('EVT missing queue_id: %s', payload)
             else:
-                # Only node2's done is considered final for the pipeline
-                if node_id == 2:
+                # Both nodes work independently - record completion
+                if node_id == 1:
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
+                    _logger.info('Node1 completed processing for queue %s', qid)
+                elif node_id == 2:
+                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node2', json.dumps(payload)))
+                    _logger.info('Node2 completed processing for queue %s', qid)
+                
+                # Check if both nodes completed this queue
+                node1_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node1'", (qid,))
+                node2_done = query("SELECT 1 FROM events WHERE queue_id=? AND event='evt_done_node2'", (qid,))
+                
+                if node1_done and node2_done:
+                    # Both nodes completed - mark queue as success
                     if st in ('success', 'ok'):
                         execute("UPDATE queues SET status=?, served_at=CURRENT_TIMESTAMP WHERE id=?", ('success', qid))
-                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node2', json.dumps(payload)))
+                        _logger.info('Queue %s completed successfully by both nodes', qid)
                     else:
                         execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
-                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_failed_node2', json.dumps(payload)))
-                    # notify node1 that node2 finished (both success and failed)
-                    notify_payload = {'queue_id': qid, 'done': 1, 'status': st, 'from': 2}
-                    try:
-                        client.publish('disp/evt/1', json.dumps(notify_payload), qos=1, retain=False)
-                        _logger.info('Published disp/evt/1 for queue %s from node2', qid)
-                    except Exception:
-                        _logger.exception('Failed to publish disp/evt/1 for queue %s', qid)
-                else:
-                    # node1's done is recorded for audit but not final
-                    execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
+                        _logger.warning('Queue %s failed: %s', qid, st)
+                    
+                    # Try to dispatch next queue if both nodes are ready
+                    _dispatch_next_queue(client)
             return
 
         # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')
@@ -164,71 +168,9 @@ def on_message(client, userdata, msg):
                 # record both values in events for debugging/audit
                 execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
                 _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
-                # Sync logic: if one node reports ready and the peer is not ready, tell the peer to sync ready
-                other = 2 if node_id == 1 else 1
-                try:
-                    # clear expired sync offers
-                    now = time.time()
-                    expired = [n for n,exp in _sync_offers.items() if exp < now]
-                    for n in expired:
-                        del _sync_offers[n]
 
-                    # if we have a pending sync offer for this node, accept it
-                    if node_id in _sync_offers:
-                        # peer confirmed, mark node ready and remove offer
-                        _node_ready[node_id] = True
-                        del _sync_offers[node_id]
-                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync_confirmed', json.dumps({'node': node_id})))
-
-                    if _node_ready.get(node_id) and not _node_ready.get(other):
-                        sync_payload = {'sync': 1, 'from': node_id}
-                        client.publish(f'disp/evt/{other}', json.dumps(sync_payload), qos=1, retain=False)
-                        _logger.info('Sent sync disp/evt/%s to match node %s ready', other, node_id)
-                        # record a pending sync offer and wait for the peer's disp/state confirmation
-                        _sync_offers[other] = time.time() + SYNC_TIMEOUT
-                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync_sent', json.dumps({'from': node_id, 'to': other, 'timeout': SYNC_TIMEOUT})))
-                except Exception:
-                    _logger.exception('Failed to send sync evt to peer')
-
-                # If both nodes are ready, dispatch next pending queue to both (FIFO)
-                if _node_ready.get(1) and _node_ready.get(2):
-                    nxt = query("SELECT id, patient_id, target_room FROM queues WHERE status='pending' ORDER BY id ASC LIMIT 1")
-                    if not nxt:
-                        _logger.debug('No pending queue to dispatch')
-                    else:
-                        q = nxt[0]
-                        items = query("SELECT pill_id,quantity FROM queue_items WHERE queue_id=?", (q['id'],))
-                        payload1 = {
-                            'queue_id': q['id'],
-                            'patient_id': q['patient_id'],
-                            'target_room': q['target_room'],
-                            'items': [{'pill_id': it['pill_id'], 'quantity': it['quantity']} for it in items]
-                        }
-                        payload2 = {
-                            'queue_id': q['id'],
-                            'patient_id': q['patient_id'],
-                            'target_room': q['target_room']
-                        }
-                        # try to atomically reserve the queue (prevent race with other dispatchers)
-                        try:
-                            conn = get_conn()
-                            cur = conn.execute("UPDATE queues SET status='in_progress' WHERE id=? AND status='pending'", (q['id'],))
-                            conn.commit()
-                            # sqlite's cursor.rowcount indicates how many rows were changed
-                            if cur.rowcount and cur.rowcount > 0:
-                                try:
-                                    client.publish('disp/cmd/1', json.dumps(payload1), qos=1, retain=False)
-                                    client.publish('disp/cmd/2', json.dumps(payload2), qos=1, retain=False)
-                                    _logger.info('Reserved and dispatched queue %s to nodes 1 and 2', q['id'])
-                                except Exception:
-                                    _logger.exception('Failed to publish dispatch for queue %s', q['id'])
-                                # reserve nodes in-memory until they update ready
-                                _node_ready[1] = False
-                                _node_ready[2] = False
-                            else:
-                                _logger.info('Failed to reserve queue %s (already taken), skipping', q['id'])
-                        except Exception:
-                            _logger.exception('Error reserving queue %s', q['id'])
+                # Try to dispatch next queue if both nodes are ready
+                _dispatch_next_queue(client)
             return
 
         # Unknown payload: try to log with optional queue_id
