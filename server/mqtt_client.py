@@ -38,6 +38,7 @@ def _check_both_nodes_ready():
 
 
 def _handle_node_completion_atomic(qid, node_id, status, payload):
+    global _client
     """Atomically update SQLite DB when a node finishes a queue"""
     conn = get_conn()
     try:
