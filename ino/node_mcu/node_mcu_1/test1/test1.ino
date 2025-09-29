@@ -10,11 +10,11 @@
 
 static const int NODE_ID = 1;
 
-// MQTT Topics (base topics)
-String T_CMD   = "disp/cmd";
-String T_ACK   = "disp/ack";
-String T_EVT   = "disp/evt";
-String T_STATE = "disp/state";
+// MQTT Topics
+String T_CMD   = "disp/cmd/1";
+String T_ACK   = "disp/ack/1";
+String T_EVT   = "disp/evt/1";
+String T_STATE = "disp/state/1";
 
 // ======= GLOBALS =======
 WiFiClient wifi;
@@ -60,7 +60,6 @@ void publishAck(int queueId, bool accepted) {
   StaticJsonDocument<128> d;
   d["queue_id"] = queueId;
   d["accepted"] = accepted ? 1 : 0;
-  d["node_id"] = NODE_ID;
   publishJson(T_ACK, d, false);
 }
  
@@ -71,7 +70,6 @@ void publishEvt(int queueId, int sensorVal, const char* status="success") {
   d["done"]     = 1;
   d["status"]   = status;
   d["sensor"]   = sensorVal;
-  d["node_id"] = NODE_ID;
   publishJson(T_EVT, d, false);
 }
 
@@ -95,21 +93,39 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   DeserializationError err = deserializeJson(d, payload, len);
   if (err) { Serial.printf("[JSON] %s\n", err.c_str()); return; }
 
-  int queueId = d["queue_id"] | -1;
-  if (queueId < 0) {
-    publishAck(queueId, false);
+  // determine if this message is an event/notification or a command
+  bool isEvt = (strstr(topic, "/evt/") != NULL);
+
+  if (isEvt) {
+    // disp/evt messages are notifications from server/peer
+    // handle sync: {"sync":1}
+    if (d.containsKey("sync") && int(d["sync"]) == 1) {
+      g_ready = true;
+      Serial.println("[node] sync received -> set ready=1");
+      StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 1; stn["uptime"] = (uint32_t)(millis()/1000);
+      publishJson(T_STATE, stn, false);
+      int queueId = d["queue_id"] | -1;
+      if (queueId >= 0) publishAck(queueId, true);
+      return;
+    }
+    // handle done notifications from peer: {"queue_id":..., "done":1}
+    if (d.containsKey("done") && int(d["done"]) == 1) {
+      int qid = d["queue_id"] | -1;
+      Serial.printf("[node] peer done notify for queue %d\n", qid);
+      // mark ready and clear active queue if it matches
+      g_ready = true;
+      if (activeQueue == qid) activeQueue = -1;
+      publishStateCombined(false);
+      return;
+    }
+    // unknown evt: ignore
     return;
   }
 
-  // handle sync event from server/peer: {"sync":1, "from":<node>}
-  if (d.containsKey("sync") && int(d["sync"]) == 1) {
-    g_ready = true;
-    Serial.println("[node] sync received -> set ready=1");
-    // publish updated state so server sees us ready
-    StaticJsonDocument<128> stn; stn["online"] = 1; stn["ready"] = 1; stn["uptime"] = (uint32_t)(millis()/1000);
-    publishJson(T_STATE, stn, false);
-    // acknowledge sync if queue_id present
-    if (queueId >= 0) publishAck(queueId, true);
+  // Otherwise treat as disp/cmd (command)
+  int queueId = d["queue_id"] | -1;
+  if (queueId < 0) {
+    publishAck(queueId, false);
     return;
   }
 
@@ -129,14 +145,14 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
       int pid = it["pill_id"] | -1;
       int qty = it["quantity"] | 1;
       Serial.printf("[node] forward pill_id=%d qty=%d\n", pid, qty);
-  forwardToArduino(activeQueue, pid, qty);
+      forwardToArduino(activeQueue, pid, qty);
       delay(100);
     }
   } else if (d.containsKey("pill_id")) {
     int pid = d["pill_id"] | -1;
     int qty = d["quantity"] | 1;
     Serial.printf("[node] forward single pill_id=%d qty=%d\n", pid, qty);
-  forwardToArduino(activeQueue, pid, qty);
+    forwardToArduino(activeQueue, pid, qty);
   }
 }
 
@@ -151,16 +167,14 @@ void mqttEnsure() {
   if (mqtt.connect(clientId)) {
     Serial.println("OK");
     mqtt.subscribe(T_CMD.c_str(), 1);
-    mqtt.subscribe(T_EVT.c_str(), 1);
-    mqtt.subscribe(T_ACK.c_str(), 1);
-    mqtt.subscribe(T_STATE.c_str(), 1);
+    // also listen to disp/evt/+ so we receive peer/server events and sync notifications
+    mqtt.subscribe("disp/evt/+", 1);
     g_online = true;
     // publish initial state
     StaticJsonDocument<128> s;
     s["online"] = 1;
     s["ready"] = 1;
     s["uptime"] = (uint32_t)(millis()/1000);
-    s["node_id"] = NODE_ID;
     publishJson(T_STATE, s, true); // retained
   } else {
     Serial.printf("fail rc=%d\n", mqtt.state());

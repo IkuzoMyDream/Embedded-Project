@@ -1,6 +1,7 @@
 import json
 import logging
 import paho.mqtt.client as mqtt
+import time
 from .config import MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID, MQTT_TOPIC_ACK, MQTT_TOPIC_CMD, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE
 from .db import execute, query, get_conn
 
@@ -11,6 +12,12 @@ _client = None
 _node_ready = {}
 # in-memory node online presence
 _node_online = {}
+
+# pending sync offers: node_id -> expiry_timestamp
+_sync_offers = {}
+
+# seconds to wait for peer to confirm ready after sync
+SYNC_TIMEOUT = 3.0
 
 
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -95,15 +102,14 @@ def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
         topic = msg.topic
-        # prefer node_id from payload; fallback to topic suffix (legacy)
-        node_id = payload.get('node_id')
-        if node_id is None:
-            parts = topic.split('/')
-            if len(parts) >= 3:
-                try:
-                    node_id = int(parts[-1])
-                except Exception:
-                    node_id = None
+        # try to extract node id from topic suffix (disp/ack/{nodeId}, disp/evt/{nodeId}, disp/state/{nodeId})
+        parts = topic.split('/')
+        node_id = None
+        if len(parts) >= 3:
+            try:
+                node_id = int(parts[-1])
+            except Exception:
+                node_id = None
 
         # ACK: {"queue_id":..., "accepted":1}
         if 'accepted' in payload:
@@ -136,12 +142,12 @@ def on_message(client, userdata, msg):
                         execute("UPDATE queues SET status=? WHERE id=?", ('failed', qid))
                         execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_failed_node2', json.dumps(payload)))
                     # notify node1 that node2 finished (both success and failed)
-                    notify_payload = {'queue_id': qid, 'done': 1, 'status': st, 'from': 2, 'node_id': 1}
+                    notify_payload = {'queue_id': qid, 'done': 1, 'status': st, 'from': 2}
                     try:
-                        client.publish(MQTT_TOPIC_EVT, json.dumps(notify_payload), qos=1, retain=False)
-                        _logger.info('Published evt (notify) for queue %s to node 1', qid)
+                        client.publish('disp/evt/1', json.dumps(notify_payload), qos=1, retain=False)
+                        _logger.info('Published disp/evt/1 for queue %s from node2', qid)
                     except Exception:
-                        _logger.exception('Failed to publish notify evt for queue %s', qid)
+                        _logger.exception('Failed to publish disp/evt/1 for queue %s', qid)
                 else:
                     # node1's done is recorded for audit but not final
                     execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (qid, 'evt_done_node1', json.dumps(payload)))
@@ -161,13 +167,26 @@ def on_message(client, userdata, msg):
                 # Sync logic: if one node reports ready and the peer is not ready, tell the peer to sync ready
                 other = 2 if node_id == 1 else 1
                 try:
+                    # clear expired sync offers
+                    now = time.time()
+                    expired = [n for n,exp in _sync_offers.items() if exp < now]
+                    for n in expired:
+                        del _sync_offers[n]
+
+                    # if we have a pending sync offer for this node, accept it
+                    if node_id in _sync_offers:
+                        # peer confirmed, mark node ready and remove offer
+                        _node_ready[node_id] = True
+                        del _sync_offers[node_id]
+                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync_confirmed', json.dumps({'node': node_id})))
+
                     if _node_ready.get(node_id) and not _node_ready.get(other):
-                        sync_payload = {'sync': 1, 'from': node_id, 'node_id': other}
-                        client.publish(MQTT_TOPIC_EVT, json.dumps(sync_payload), qos=1, retain=False)
-                        _logger.info('Sent sync evt to node %s to match node %s ready', other, node_id)
-                        # update in-memory state and record event for auditing
-                        _node_ready[other] = True
-                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync', json.dumps({'from': node_id, 'to': other})))
+                        sync_payload = {'sync': 1, 'from': node_id}
+                        client.publish(f'disp/evt/{other}', json.dumps(sync_payload), qos=1, retain=False)
+                        _logger.info('Sent sync disp/evt/%s to match node %s ready', other, node_id)
+                        # record a pending sync offer and wait for the peer's disp/state confirmation
+                        _sync_offers[other] = time.time() + SYNC_TIMEOUT
+                        execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state_sync_sent', json.dumps({'from': node_id, 'to': other, 'timeout': SYNC_TIMEOUT})))
                 except Exception:
                     _logger.exception('Failed to send sync evt to peer')
 
