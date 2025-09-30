@@ -25,7 +25,9 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <Stepper.h>
+#include <Servo.h>
 
+Servo myServo;
 // ---------- Communication pins ----------
 const uint8_t PIN_RX = 2;  // Arduino receives from NodeMCU TX
 const uint8_t PIN_TX = 3;  // Arduino sends to NodeMCU RX
@@ -76,15 +78,13 @@ void triggerServo() {
 void triggerServoDirection(int room) {
   if (room == 2) {
     // Room 2 -> หัน left
-    digitalWrite(PIN_SERVO1, HIGH);
-    delay(300); // หัน left
-    digitalWrite(PIN_SERVO1, LOW);
+    myServo.write(1);    // มุมตรงกลาง
+
     Serial.println("[SERVO] Room 2 - Turn LEFT");
   } else if (room == 3) {
     // Room 3 -> หัน right  
-    digitalWrite(PIN_SERVO1, HIGH);
-    delay(700); // หัน right (นานกว่า = หัน right)
-    digitalWrite(PIN_SERVO1, LOW);
+    myServo.write(45);    // มุมตรงกลาง
+
     Serial.println("[SERVO] Room 3 - Turn RIGHT");
   } else {
     // Default trigger
@@ -342,7 +342,8 @@ void processCommand(char* command) {
 // ---------- Setup / Loop ----------
 void setup() {
   Serial.begin(9600);     
-  nodeSerial.begin(9600); 
+  nodeSerial.begin(9600);
+  myServo.attach(PIN_SERVO1);  
   delay(200);
   Serial.println(F("[ARDUINO2] Simplified controller ready"));
   Serial.println(F("[ARDUINO2] Commands: STEP,0/1 ROOM,1/2/3 SERVO1,1 PUMP,0/1 DC,0/1 STOP"));
