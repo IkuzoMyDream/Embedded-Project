@@ -8,12 +8,12 @@
  *   GND -> GND
  *
  * Pin Assignments:
- *   Pins 8,9,10,11 -> NEMA17 Stepper Motor Outputs
+ *   Pins 8,9,10,13 -> NEMA17 Stepper Motor Outputs
  *   Pins 2,3 -> TX/RX Communication
  *   Pins 4,5,6 -> IR Sensors 1,2,3
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
- *   Pin A0 -> Servo 1 (Digital output) 
+ *   Pin 11 -> Servo 1 (Digital output) 
  *
  * Simplified Control:
  *   - Receive STEP command -> Start operation with 30s timeout
@@ -32,7 +32,7 @@ const uint8_t PIN_TX = 3;  // Arduino sends to NodeMCU RX
 
 // ---------- NEMA17 Stepper motor configuration ----------
 const int stepsPerRevolution = 200;  // Steps per revolution for NEMA17
-Stepper myStepper(stepsPerRevolution, 8, 9, 10, 11);  // Initialize stepper on pins 8-11
+Stepper myStepper(stepsPerRevolution, 8, 9, 10, 13);  // Initialize stepper on pins 8,9,10,13
 
 // ---------- IR Sensor pins ----------
 const uint8_t PIN_IR_SENSOR1 = 4;  // IR sensor 1
@@ -42,7 +42,7 @@ const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3
 // ---------- Other actuator pins ----------
 const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
 const uint8_t PIN_PUMP = 12;       // Pump 
-const uint8_t PIN_SERVO1 = A0;     // Servo 1 (digital output on analog pin)
+const uint8_t PIN_SERVO1 = 11;     // Servo 1 (digital output)
 
 // ---------- Communication ----------
 SoftwareSerial nodeSerial(PIN_RX, PIN_TX); // RX, TX for communication with NodeMCU
@@ -71,6 +71,25 @@ void triggerServo() {
   delay(500); // Pulse duration
   digitalWrite(PIN_SERVO1, LOW);
   Serial.println("[SERVO] Triggered");
+}
+
+void triggerServoDirection(int room) {
+  if (room == 2) {
+    // Room 2 -> หัน left
+    digitalWrite(PIN_SERVO1, HIGH);
+    delay(300); // หัน left
+    digitalWrite(PIN_SERVO1, LOW);
+    Serial.println("[SERVO] Room 2 - Turn LEFT");
+  } else if (room == 3) {
+    // Room 3 -> หัน right  
+    digitalWrite(PIN_SERVO1, HIGH);
+    delay(700); // หัน right (นานกว่า = หัน right)
+    digitalWrite(PIN_SERVO1, LOW);
+    Serial.println("[SERVO] Room 3 - Turn RIGHT");
+  } else {
+    // Default trigger
+    triggerServo();
+  }
 }
 
 void setPump(bool on) {
@@ -273,9 +292,9 @@ void processCommand(char* command) {
     return;
   }
   
-  // Simple servo trigger
+  // Simple servo trigger with direction based on room
   if (strncmp(command, "SERVO1,1", 8) == 0 || strncmp(command, "SERVO5,1", 8) == 0) {
-    triggerServo();
+    triggerServoDirection(targetRoom); // Use current target room for direction
     Serial.println("ack");
     nodeSerial.println("ack");
     return;
