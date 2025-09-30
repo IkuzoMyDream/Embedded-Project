@@ -52,7 +52,6 @@ const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3
 const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
 const uint8_t PIN_PUMP = 12;       // Pump 
 const uint8_t PIN_SERVO1 = A0;     // Servo 1 (digital output on analog pin)
-const uint8_t PIN_SERVO2 = A1;     // Servo 2 (digital output on analog pin)
 
 // ---------- Servo positions ----------
 const uint8_t SERVO_CLOSED = 60;   // closed position
@@ -71,7 +70,6 @@ uint8_t stepperDirection = 0; // 0 = left, 1 = right
 
 // ---------- Servo state tracking ----------
 bool servo1_state = false;  // Digital servo state
-bool servo2_state = false;  // Digital servo state
 
 // ---------- Smooth servo movement function (Updated) ----------
 void setServoState(int servoId, bool state) {
@@ -81,13 +79,6 @@ void setServoState(int servoId, bool state) {
     Serial.print("[SERVO1] State: ");
     Serial.println(state ? 1 : 0);
     nodeSerial.print("[SERVO1] State: ");
-    nodeSerial.println(state ? 1 : 0);
-  } else if (servoId == 2) {
-    servo2_state = state;
-    digitalWrite(PIN_SERVO2, state ? HIGH : LOW);
-    Serial.print("[SERVO2] State: ");
-    Serial.println(state ? 1 : 0);
-    nodeSerial.print("[SERVO2] State: ");
     nodeSerial.println(state ? 1 : 0);
   }
 }
@@ -99,14 +90,6 @@ void triggerServo1() {
   setServoState(1, true);
   delay(500); // Pulse duration
   setServoState(1, false);
-}
-
-void triggerServo2() {
-  Serial.println("[SERVO2] Triggered");
-  nodeSerial.println("[SERVO2] Triggered");
-  setServoState(2, true);
-  delay(500); // Pulse duration
-  setServoState(2, false);
 }
 
 // ---------- Actuator control functions ----------
@@ -124,7 +107,6 @@ void setupActuators() {
   
   // Setup digital servo outputs
   pinMode(PIN_SERVO1, OUTPUT);
-  pinMode(PIN_SERVO2, OUTPUT);
   
   pinMode(PIN_PUMP, OUTPUT);
   pinMode(PIN_DC_EN, OUTPUT);
@@ -135,7 +117,6 @@ void setupActuators() {
   digitalWrite(PIN_STEP_OUT3, LOW);
   digitalWrite(PIN_STEP_OUT4, LOW);
   digitalWrite(PIN_SERVO1, LOW);
-  digitalWrite(PIN_SERVO2, LOW);
   digitalWrite(PIN_PUMP, LOW);
   digitalWrite(PIN_DC_EN, LOW);
   
@@ -146,7 +127,6 @@ void setupActuators() {
   
   stepperDirection = 0; // Initialize to left (0)
   servo1_state = false;
-  servo2_state = false;
 }
 
 void setStepDirection(uint8_t direction) {
@@ -171,46 +151,6 @@ void setStepDirection(uint8_t direction) {
     digitalWrite(PIN_STEP_OUT3, LOW);
     digitalWrite(PIN_STEP_OUT4, LOW);
   }
-}
-
-void setStepDirection(uint8_t direction) {
-  stepperDirection = direction; // Store direction: 0=left, 1=right
-  
-  if (direction == 0) {
-    // Turn left - set NEMA17 outputs for counter-clockwise
-    Serial.println("[STEP] Direction: LEFT (0)");
-    nodeSerial.println("[STEP] Direction: LEFT (0)");
-    // Example pattern for left rotation:
-    digitalWrite(PIN_STEP_OUT1, HIGH);
-    digitalWrite(PIN_STEP_OUT2, LOW);
-    digitalWrite(PIN_STEP_OUT3, LOW);
-    digitalWrite(PIN_STEP_OUT4, LOW);
-  } else {
-    // Turn right - set NEMA17 outputs for clockwise  
-    Serial.println("[STEP] Direction: RIGHT (1)");
-    nodeSerial.println("[STEP] Direction: RIGHT (1)");
-    // Example pattern for right rotation:
-    digitalWrite(PIN_STEP_OUT1, LOW);
-    digitalWrite(PIN_STEP_OUT2, HIGH);
-    digitalWrite(PIN_STEP_OUT3, LOW);
-    digitalWrite(PIN_STEP_OUT4, LOW);
-  }
-}
-
-void triggerServo1() {
-  Serial.println("[SERVO1] Triggered");
-  nodeSerial.println("[SERVO1] Triggered");
-  setServoState(1, true);
-  delay(500); // Pulse duration
-  setServoState(1, false);
-}
-
-void triggerServo2() {
-  Serial.println("[SERVO2] Triggered");
-  nodeSerial.println("[SERVO2] Triggered");
-  setServoState(2, true);
-  delay(500); // Pulse duration
-  setServoState(2, false);
 }
 
 void setPump(bool on) {
