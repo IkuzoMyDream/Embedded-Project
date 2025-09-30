@@ -195,12 +195,9 @@ void processSerialResponse(const char* response) {
   Serial.println(response);
   
   if (strcasecmp(response, "done") == 0) {
-    pendingCommands--; // Decrement pending commands
-    Serial.printf("[NODE] Arduino response received, pending: %d\n", pendingCommands);
-    
-    // Only complete the queue when all commands are done
-    if (pendingCommands <= 0 && activeQueue >= 0) {
-      Serial.printf("[NODE] All Arduino commands completed for queue %d\n", activeQueue);
+    // Only complete when we get actual "done" from Arduino (after IR detection)
+    if (activeQueue >= 0) {
+      Serial.printf("[NODE] Arduino IR detection completed for queue %d\n", activeQueue);
       
       publishEvtDone(activeQueue, "success");
       activeQueue = -1;
@@ -208,6 +205,9 @@ void processSerialResponse(const char* response) {
       pendingCommands = 0; // Reset counter
       publishReady(true);
     }
+  } else if (strcasecmp(response, "ack") == 0) {
+    pendingCommands--; // Decrement pending commands for acknowledgments
+    Serial.printf("[NODE] Arduino ack received, pending: %d\n", pendingCommands);
   } else if (strcasecmp(response, "sensor_done") == 0) {
     // Handle sensor completion separately
     if (activeQueue >= 0) {
@@ -252,6 +252,9 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   pendingCommands = 0; // Reset pending commands counter
 
   Serial.printf("[NODE] Processing queue %d for target_room %d\n", queueId, targetRoom);
+
+  // First, tell Arduino which room we're targeting
+  sendToArduino("ROOM," + String(targetRoom));
 
   // Based on target_room, send stepper commands to Arduino
   // Use 1-bit direction control: 0=left, 1=right

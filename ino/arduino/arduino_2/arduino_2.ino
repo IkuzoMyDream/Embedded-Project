@@ -11,7 +11,7 @@
  * Pin Assignments:
  *   Pins 8,9,10,11 -> NEMA17 Stepper Motor Outputs
  *   Pins 2,3 -> TX/RX Communication
- *   Pins 4,5,6 -> IR Sensors 1,2,3
+  *   Pins 4,5,6 -> IR Sensors 1,2,3
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
  *   Pin A0 -> Servo 1 (Digital output) 
@@ -68,6 +68,10 @@ bool stepperRunning = false;  // Track if stepper should be running
 int stepperDirection = 0;     // 0 = clockwise, 1 = counterclockwise
 unsigned long lastStepTime = 0;
 const unsigned long stepInterval = 100; // Step every 100ms for continuous movement
+
+// ---------- Queue status tracking ----------
+int activeTargetRoom = -1;   // Track which room we're waiting for (1,2,3)
+bool waitingForIRDetection = false;  // Are we waiting for IR sensor?
 
 // ---------- Servo state tracking ----------
 bool servo1_state = false;  // Digital servo state
@@ -177,6 +181,51 @@ void stepperLoop() {
   }
 }
 
+// ---------- Queue management functions ----------
+void setTargetRoom(int room) {
+  activeTargetRoom = room;
+  waitingForIRDetection = true;
+  Serial.print("[QUEUE] Waiting for IR sensor ");
+  Serial.print(room);
+  Serial.println(" to detect");
+  nodeSerial.print("[QUEUE] Waiting for IR sensor ");
+  nodeSerial.print(room);
+  nodeSerial.println(" to detect");
+}
+
+void sendQueueDone() {
+  Serial.print("[QUEUE] Room ");
+  Serial.print(activeTargetRoom);
+  Serial.println(" completed - sending done");
+  nodeSerial.println("done");  // Send done to NodeMCU
+  
+  // Reset queue state
+  activeTargetRoom = -1;
+  waitingForIRDetection = false;
+}
+
+// ---------- Individual IR sensor check functions ----------
+bool checkIRSensor1() {
+  bool currentIR1 = digitalRead(PIN_IR_SENSOR1);
+  bool detected = currentIR1 && !lastIRSensor1State;
+  lastIRSensor1State = currentIR1;
+  return detected;
+}
+
+bool checkIRSensor2() {
+  bool currentIR2 = digitalRead(PIN_IR_SENSOR2);
+  bool detected = currentIR2 && !lastIRSensor2State;
+  lastIRSensor2State = currentIR2;
+  return detected;
+}
+
+bool checkIRSensor3() {
+  bool currentIR3 = digitalRead(PIN_IR_SENSOR3);
+  bool detected = currentIR3 && !lastIRSensor3State;
+  lastIRSensor3State = currentIR3;
+  return detected;
+}
+
 void controlServo(int servoId, int state) {
   switch (servoId) {
     case 1: 
@@ -194,12 +243,27 @@ void processCommand(char* command) {
   Serial.print("[CMD] Received: ");
   Serial.println(command);
   
+  // Parse ROOM command: "ROOM,1" or "ROOM,2" or "ROOM,3"
+  if (strncmp(command, "ROOM,", 5) == 0) {
+    int room = atoi(command + 5);
+    if (room >= 1 && room <= 3) {
+      setTargetRoom(room);
+      Serial.println("ack");  // Acknowledge room setting
+      nodeSerial.println("ack");
+    } else {
+      Serial.println("error");
+      nodeSerial.println("error");
+    }
+    return;
+  }
+  
   // Parse STEP command: "STEP,0" (left) or "STEP,1" (right)
   if (strncmp(command, "STEP,", 5) == 0) {
     uint8_t direction = atoi(command + 5);
     setStepDirection(direction);
-    Serial.println("done");
-    nodeSerial.println("done");
+    // Don't send "done" immediately - wait for IR detection
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
@@ -208,8 +272,8 @@ void processCommand(char* command) {
     char dirChar = command[4];
     uint8_t direction = (dirChar == 'L' || dirChar == 'l') ? 0 : 1;
     setStepDirection(direction);
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
@@ -217,23 +281,23 @@ void processCommand(char* command) {
   if (strncmp(command, "SERVO1,", 7) == 0) {
     int value = atoi(command + 7);
     setServoState(1, value != 0);
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
   // Legacy SERVO5/SERVO6 support
   if (strncmp(command, "SERVO5,", 7) == 0) {
     triggerServo1(); // Map SERVO5 to SERVO1
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
   if (strncmp(command, "SERVO6,", 7) == 0) {
     triggerServo1(); // Map SERVO6 to SERVO1 (only servo available)
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
@@ -241,8 +305,8 @@ void processCommand(char* command) {
   if (strncmp(command, "PUMP,", 5) == 0) {
     int value = atoi(command + 5);
     setPump(value != 0);
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
@@ -251,8 +315,8 @@ void processCommand(char* command) {
     int servoId, state;
     if (sscanf(command + 6, "%d,%d", &servoId, &state) == 2) {
       controlServo(servoId, state);
-      Serial.println("done");
-      nodeSerial.println("done");
+      Serial.println("ack");
+      nodeSerial.println("ack");
       return;
     }
   }
@@ -269,8 +333,8 @@ void processCommand(char* command) {
       Serial.println("[DC] Sequence complete");
     }
     
-    Serial.println("done");
-    nodeSerial.println("done");
+    Serial.println("ack");
+    nodeSerial.println("ack");
     return;
   }
   
@@ -280,32 +344,44 @@ void processCommand(char* command) {
 }
 
 void checkIRSensors() {
-  // Check IR Sensor 1
-  bool currentIR1 = digitalRead(PIN_IR_SENSOR1);
-  if (currentIR1 && !lastIRSensor1State) {
-    Serial.println("[IR1] Detected!");
-    nodeSerial.println("ir1_detected");
-    nodeSerial.println("1");
+  // Only check IR sensor if we're waiting for detection and have an active target room
+  if (!waitingForIRDetection || activeTargetRoom < 1 || activeTargetRoom > 3) {
+    return;
   }
-  lastIRSensor1State = currentIR1;
   
-  // Check IR Sensor 2
-  bool currentIR2 = digitalRead(PIN_IR_SENSOR2);
-  if (currentIR2 && !lastIRSensor2State) {
-    Serial.println("[IR2] Detected!");
-    nodeSerial.println("ir2_detected");
-    nodeSerial.println("1");
-  }
-  lastIRSensor2State = currentIR2;
+  // Check only the IR sensor that matches the current target room
+  bool detected = false;
   
-  // Check IR Sensor 3
-  bool currentIR3 = digitalRead(PIN_IR_SENSOR3);
-  if (currentIR3 && !lastIRSensor3State) {
-    Serial.println("[IR3] Detected!");
-    nodeSerial.println("ir3_detected");
-    nodeSerial.println("1");
+  switch (activeTargetRoom) {
+    case 1:
+      detected = checkIRSensor1();
+      if (detected) {
+        Serial.println("[IR1] Detected for Room 1!");
+        nodeSerial.println("ir1_detected");
+      }
+      break;
+      
+    case 2:
+      detected = checkIRSensor2();
+      if (detected) {
+        Serial.println("[IR2] Detected for Room 2!");
+        nodeSerial.println("ir2_detected");
+      }
+      break;
+      
+    case 3:
+      detected = checkIRSensor3();
+      if (detected) {
+        Serial.println("[IR3] Detected for Room 3!");
+        nodeSerial.println("ir3_detected");
+      }
+      break;
   }
-  lastIRSensor3State = currentIR3;
+  
+  // Send done if any detection occurred
+  if (detected) {
+    sendQueueDone();
+  }
 }
 
 // ---------- Setup / Loop ----------
@@ -315,7 +391,7 @@ void setup() {
   delay(200);
   Serial.println(F("[ARDUINO2] Production controller ready"));
   Serial.println(F("[ARDUINO2] Using SoftwareSerial on pins 2(RX) and 3(TX)"));
-  
+   
   setupActuators();
   
   Serial.println(F("[ARDUINO2] Commands:"));
@@ -331,6 +407,10 @@ void setup() {
   // Clear buffer
   memset(serialBuffer, 0, sizeof(serialBuffer));
   bufferIndex = 0;
+  
+  // Initialize queue state
+  activeTargetRoom = -1;
+  waitingForIRDetection = false;
 }
 
 void loop() {
