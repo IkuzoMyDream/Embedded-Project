@@ -1,11 +1,12 @@
-/* arduino_2.ino — Simplified Arduino controller for NodeMCU2
+/* arduino_2.ino — Arduino controller for NodeMCU2 (SoftwareSerial communication)
  * Role: Receive commands via SoftwareSerial from NodeMCU and control stepper/servos/pump/DC
- * Communication: NodeMCU sends CSV commands, Arduino responds with "ack" and "done"
+ * Communication: NodeMCU sends CSV commands, Arduino responds with "done"
  *
  * Hardware connections:
  *   NodeMCU TX (D6/GPIO12) -> Arduino Pin 2 (RX)
  *   NodeMCU RX (D7/GPIO13) -> Arduino Pin 3 (TX)
  *   GND -> GND
+ *   Both devices can be connected to USB separately for programming/monitoring
  *
  * Pin Assignments:
  *   Pins 8,9,10,11 -> NEMA17 Stepper Motor Outputs
@@ -15,11 +16,19 @@
  *   Pin 12 -> Pump
  *   Pin A0 -> Servo 1 (Digital output) 
  *
- * Simplified Control:
- *   - Receive STEP command -> Start operation with 30s timeout
- *   - Set target room -> Monitor IR sensor for that room
- *   - IR detection -> Stop operation and send "done"
- *   - Simple state management with minimal dependencies
+ * Serial Protocol:
+ *   NodeMCU -> Arduino: "ROOM,1/2/3" or "STEP,0/1" or "SERVO1,0/1" or "SERVO5,1" or "PUMP,0/1" or "DC,0/1"
+ *   Arduino -> NodeMCU: "ack" for command acknowledgment, "done" when IR detection complete
+ *   
+ *   Control Scheme:
+ *     ROOM,1/2/3 = Set target room for IR detection
+ *     STEP,0 = Turn Clockwise (0)
+ *     STEP,1 = Turn Counterclockwise (1)
+ *     SERVO1,0/1 = Digital servo control
+ *     SERVO5,1 = Legacy mapping to SERVO1
+ *     DC,0/1 = Disable/Enable DC Motor (stops stepper when enabled)
+ *     PUMP,0/1 = Disable/Enable Pump
+ *     IR sensors report detection automatically for active target room
  */
 
 #include <Arduino.h>
@@ -44,22 +53,26 @@ const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
 const uint8_t PIN_PUMP = 12;       // Pump 
 const uint8_t PIN_SERVO1 = A0;     // Servo 1 (digital output on analog pin)
 
-// ---------- Communication ----------
+// ---------- Servo positions ----------
+const uint8_t SERVO_CLOSED = 60;   // closed position
+const uint8_t SERVO_OPEN   = 120;  // open position
+
+// ---------- State (Simplified) ----------
 SoftwareSerial nodeSerial(PIN_RX, PIN_TX); // RX, TX for communication with NodeMCU
-char serialBuffer[64]; // Fixed size buffer
+char serialBuffer[64]; // Fixed size buffer instead of String
 uint8_t bufferIndex = 0;
 
-// ---------- Simplified State ----------
+// IR Sensor states
+bool lastIRSensor1State = false;
+bool lastIRSensor2State = false;
+bool lastIRSensor3State = false;
+
+// Simple operation state
 bool isOperating = false;       // Is system currently operating?
 int targetRoom = -1;            // Which room we're targeting (1,2,3)
 int stepDirection = 0;          // 0 = clockwise, 1 = counterclockwise
 unsigned long operationStartTime = 0;
 const unsigned long OPERATION_TIMEOUT = 30000; // 30 seconds timeout
-
-// IR Sensor edge detection
-bool lastIRSensor1State = false;
-bool lastIRSensor2State = false;
-bool lastIRSensor3State = false;
 
 // Stepper control
 unsigned long lastStepTime = 0;
@@ -85,56 +98,57 @@ void setDC(bool on) {
   Serial.println(on ? "ON" : "OFF");
 }
 
-// ---------- Hardware setup ----------
 void setupHardware() {
-  // Configure stepper motor speed
-  myStepper.setSpeed(10); // RPM
+  // Setup stepper speed
+  myStepper.setSpeed(60);  // 60 RPM
   
-  // Set pin modes
-  pinMode(PIN_IR_SENSOR1, INPUT);
-  pinMode(PIN_IR_SENSOR2, INPUT);
-  pinMode(PIN_IR_SENSOR3, INPUT);
-  pinMode(PIN_DC_EN, OUTPUT);
-  pinMode(PIN_PUMP, OUTPUT);
+  // Setup pins
+  pinMode(PIN_IR_SENSOR1, INPUT_PULLUP);
+  pinMode(PIN_IR_SENSOR2, INPUT_PULLUP);
+  pinMode(PIN_IR_SENSOR3, INPUT_PULLUP);
   pinMode(PIN_SERVO1, OUTPUT);
+  pinMode(PIN_PUMP, OUTPUT);
+  pinMode(PIN_DC_EN, OUTPUT);
   
-  // Initialize outputs to OFF
-  digitalWrite(PIN_DC_EN, LOW);
-  digitalWrite(PIN_PUMP, LOW);
+  // Initialize to OFF
   digitalWrite(PIN_SERVO1, LOW);
+  digitalWrite(PIN_PUMP, LOW);
+  digitalWrite(PIN_DC_EN, LOW);
   
-  Serial.println("[HARDWARE] Setup complete");
+  // Read initial IR states
+  lastIRSensor1State = digitalRead(PIN_IR_SENSOR1);
+  lastIRSensor2State = digitalRead(PIN_IR_SENSOR2);
+  lastIRSensor3State = digitalRead(PIN_IR_SENSOR3);
+  
+  Serial.println("[SETUP] Hardware initialized");
 }
 
-// ---------- Operation control ----------
+// ---------- Main operation control ----------
 void startOperation(int room, int direction) {
-  isOperating = true;
   targetRoom = room;
   stepDirection = direction;
+  isOperating = true;
   operationStartTime = millis();
   
   Serial.print("[OP] Started - Room:");
   Serial.print(room);
   Serial.print(" Dir:");
-  Serial.println(direction);
+  Serial.println(direction == 0 ? "CW" : "CCW");
 }
 
 void stopOperation(const char* reason) {
-  if (!isOperating) return;
-  
   isOperating = false;
+  targetRoom = -1;
+  
+  // Stop all actuators
+  setDC(false);
+  setPump(false);
+  
   Serial.print("[OP] Stopped - ");
   Serial.println(reason);
-  
-  // Send done to NodeMCU
   nodeSerial.println("done");
-  
-  // Reset simple state
-  targetRoom = -1;
-  stepDirection = 0;
 }
 
-// ---------- Stepper loop with timeout ----------
 void stepperLoop() {
   if (!isOperating) return;
   
@@ -156,36 +170,116 @@ void stepperLoop() {
   }
 }
 
-// ---------- IR sensor monitoring ----------
-void checkIRSensors() {
-  if (!isOperating || targetRoom < 1 || targetRoom > 3) return;
+// ---------- Queue management functions ----------
+void setTargetRoom(int room) {
+  activeTargetRoom = room;
+  waitingForIRDetection = true;
+  Serial.print("[QUEUE] Waiting for IR sensor ");
+  Serial.print(room);
+  Serial.println(" to detect");
+  nodeSerial.print("[QUEUE] Waiting for IR sensor ");
+  nodeSerial.print(room);
+  nodeSerial.println(" to detect");
+}
+
+void sendQueueDone() {
+  Serial.print("[QUEUE] Room ");
+  Serial.print(activeTargetRoom);
+  Serial.println(" completed - sending done");
   
-  bool detected = false;
+  // Pause stepper but keep state (don't clear stepperRunning or stepperDirection)
+  stepperPaused = true;          // Pause stepper movement but keep state
+  setDcState(false);            // Stop DC motor
+  setPump(false);               // Stop pump
+  setServoState(1, false);      // Stop servo
   
-  // Check the target room's IR sensor
-  if (targetRoom == 1) {
-    bool current = digitalRead(PIN_IR_SENSOR1);
-    detected = current && !lastIRSensor1State;
-    lastIRSensor1State = current;
-  } else if (targetRoom == 2) {
-    bool current = digitalRead(PIN_IR_SENSOR2);
-    detected = current && !lastIRSensor2State;
-    lastIRSensor2State = current;
-  } else if (targetRoom == 3) {
-    bool current = digitalRead(PIN_IR_SENSOR3);
-    detected = current && !lastIRSensor3State;
-    lastIRSensor3State = current;
-  }
+  Serial.println("[SYSTEM] Stepper paused (state preserved), other actuators stopped");
+  nodeSerial.println("[SYSTEM] Stepper paused (state preserved), other actuators stopped");
   
-  if (detected) {
-    Serial.print("[IR");
-    Serial.print(targetRoom);
-    Serial.println("] DETECTED");
-    stopOperation("IR_DETECTED");
+  nodeSerial.println("done");   // Send done to NodeMCU
+  
+  // Reset queue state
+  activeTargetRoom = -1;
+  waitingForIRDetection = false;
+  
+  Serial.print("[SYSTEM] Queue cleared - Stepper state: running=");
+  Serial.print(stepperRunning ? "true" : "false");
+  Serial.print(", paused=");
+  Serial.print(stepperPaused ? "true" : "false");
+  Serial.print(", direction=");
+  Serial.println(stepperDirection);
+}
+
+// ---------- System state management ----------
+void clearAllStates() {
+  // Stop all motors and actuators
+  stepperRunning = false;
+  stepperPaused = false;        // Clear paused state
+  setDcState(false);
+  setPump(false); 
+  setServoState(1, false);
+  
+  // Reset state variables
+  dcState = false;
+  pumpState = false;
+  servo1_state = false;
+  stepperDirection = 0;
+  
+  // Reset queue tracking
+  activeTargetRoom = -1;
+  waitingForIRDetection = false;
+  
+  Serial.println("[SYSTEM] Complete state reset performed - all states cleared");
+}
+
+// ---------- Stepper resume function ----------
+void resumeStepper() {
+  if (stepperRunning && stepperPaused) {
+    stepperPaused = false;
+    Serial.print("[STEPPER] Resumed - direction=");
+    Serial.println(stepperDirection);
+    nodeSerial.print("[STEPPER] Resumed - direction=");
+    nodeSerial.println(stepperDirection);
+  } else {
+    Serial.println("[STEPPER] Cannot resume - not in paused state");
   }
 }
 
-// ---------- Command processing ----------
+// ---------- Individual IR sensor check functions ----------
+bool checkIRSensor1() {
+  bool currentIR1 = digitalRead(PIN_IR_SENSOR1);
+  bool detected = currentIR1 && !lastIRSensor1State;
+  lastIRSensor1State = currentIR1;
+  return detected;
+}
+
+bool checkIRSensor2() {
+  bool currentIR2 = digitalRead(PIN_IR_SENSOR2);
+  bool detected = currentIR2 && !lastIRSensor2State;
+  lastIRSensor2State = currentIR2;
+  return detected;
+}
+
+bool checkIRSensor3() {
+  bool currentIR3 = digitalRead(PIN_IR_SENSOR3);
+  bool detected = currentIR3 && !lastIRSensor3State;
+  lastIRSensor3State = currentIR3;
+  return detected;
+}
+
+void controlServo(int servoId, int state) {
+  switch (servoId) {
+    case 1: 
+      setServoState(1, state != 0);
+      break;
+    case 2: 
+      setServoState(2, state != 0);
+      break;
+    default: 
+      return;
+  }
+}
+
 void processCommand(char* command) {
   Serial.print("[CMD] Received: ");
   Serial.println(command);
@@ -258,6 +352,35 @@ void processCommand(char* command) {
   // Unknown command
   Serial.print("[ERROR] Unknown command: ");
   Serial.println(command);
+}
+
+// ---------- IR sensor monitoring ----------
+void checkIRSensors() {
+  if (!isOperating || targetRoom < 1 || targetRoom > 3) return;
+  
+  bool detected = false;
+  
+  // Check the target room's IR sensor
+  if (targetRoom == 1) {
+    bool current = digitalRead(PIN_IR_SENSOR1);
+    detected = current && !lastIRSensor1State;
+    lastIRSensor1State = current;
+  } else if (targetRoom == 2) {
+    bool current = digitalRead(PIN_IR_SENSOR2);
+    detected = current && !lastIRSensor2State;
+    lastIRSensor2State = current;
+  } else if (targetRoom == 3) {
+    bool current = digitalRead(PIN_IR_SENSOR3);
+    detected = current && !lastIRSensor3State;
+    lastIRSensor3State = current;
+  }
+  
+  if (detected) {
+    Serial.print("[IR");
+    Serial.print(targetRoom);
+    Serial.println("] DETECTED");
+    stopOperation("IR_DETECTED");
+  }
 }
 
 // ---------- Setup / Loop ----------
