@@ -166,14 +166,41 @@ void checkIRSensors() {
   if (targetRoom == 1) {
     bool current = digitalRead(PIN_IR_SENSOR1);
     detected = current && !lastIRSensor1State;  // Detect LOW -> HIGH (box removed)
+    
+    // Debug output
+    Serial.print("[IR1] Current:");
+    Serial.print(current);
+    Serial.print(" Last:");
+    Serial.print(lastIRSensor1State);
+    Serial.print(" Detected:");
+    Serial.println(detected);
+    
     lastIRSensor1State = current;
   } else if (targetRoom == 2) {
     bool current = digitalRead(PIN_IR_SENSOR2);
     detected = current && !lastIRSensor2State;  // Detect LOW -> HIGH (box removed)
+    
+    // Debug output
+    Serial.print("[IR2] Current:");
+    Serial.print(current);
+    Serial.print(" Last:");
+    Serial.print(lastIRSensor2State);
+    Serial.print(" Detected:");
+    Serial.println(detected);
+    
     lastIRSensor2State = current;
   } else if (targetRoom == 3) {
     bool current = digitalRead(PIN_IR_SENSOR3);
     detected = current && !lastIRSensor3State;  // Detect LOW -> HIGH (box removed)
+    
+    // Debug output
+    Serial.print("[IR3] Current:");
+    Serial.print(current);
+    Serial.print(" Last:");
+    Serial.print(lastIRSensor3State);
+    Serial.print(" Detected:");
+    Serial.println(detected);
+    
     lastIRSensor3State = current;
   }
   
@@ -269,6 +296,18 @@ void setup() {
   Serial.println(F("[ARDUINO2] Commands: STEP,0/1 ROOM,1/2/3 SERVO1,1 PUMP,0/1 DC,0/1 STOP"));
    
   setupHardware();
+  
+  // Initialize IR sensor states with actual readings
+  lastIRSensor1State = digitalRead(PIN_IR_SENSOR1);
+  lastIRSensor2State = digitalRead(PIN_IR_SENSOR2);
+  lastIRSensor3State = digitalRead(PIN_IR_SENSOR3);
+  
+  Serial.print("[IR] Initial states - IR1:");
+  Serial.print(lastIRSensor1State);
+  Serial.print(" IR2:");
+  Serial.print(lastIRSensor2State);
+  Serial.print(" IR3:");
+  Serial.println(lastIRSensor3State);
   
   // Clear buffer
   memset(serialBuffer, 0, sizeof(serialBuffer));
