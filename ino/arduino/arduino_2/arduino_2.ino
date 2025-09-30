@@ -15,16 +15,15 @@
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
  *   Pin A0 -> Servo 1 (Digital output)
- *   Pin A1 -> Servo 2 (Digital output)
  *
  * Serial Protocol:
- *   NodeMCU -> Arduino: "STEP,0/1" or "SERVO1,0/1" or "SERVO2,0/1" or "PUMP,0/1" or "DC,0/1"
+ *   NodeMCU -> Arduino: "STEP,0/1" or "SERVO1,0/1" or "PUMP,0/1" or "DC,0/1"
  *   Arduino -> NodeMCU: "done" when operation complete
  *   
  *   Control Scheme:
  *     STEP,0 = Turn Left (Counter-clockwise)
  *     STEP,1 = Turn Right (Clockwise)
- *     SERVO1/2,0/1 = Digital servo control
+ *     SERVO1,0/1 = Digital servo control
  *     DC,0/1 = Disable/Enable DC Motor
  *     PUMP,0/1 = Disable/Enable Pump
  *     IR sensors report detection automatically
@@ -216,15 +215,6 @@ void processCommand(char* command) {
     return;
   }
   
-  // Parse SERVO2 command: "SERVO2,1" or "SERVO2,0"
-  if (strncmp(command, "SERVO2,", 7) == 0) {
-    int value = atoi(command + 7);
-    setServoState(2, value != 0);
-    Serial.println("done");
-    nodeSerial.println("done");
-    return;
-  }
-  
   // Legacy SERVO5/SERVO6 support
   if (strncmp(command, "SERVO5,", 7) == 0) {
     triggerServo1(); // Map SERVO5 to SERVO1
@@ -234,7 +224,7 @@ void processCommand(char* command) {
   }
   
   if (strncmp(command, "SERVO6,", 7) == 0) {
-    triggerServo2(); // Map SERVO6 to SERVO2
+    triggerServo1(); // Map SERVO6 to SERVO1 (only servo available)
     Serial.println("done");
     nodeSerial.println("done");
     return;
@@ -324,13 +314,12 @@ void setup() {
   Serial.println(F("[ARDUINO2] Commands:"));
   Serial.println(F("  STEP,0/1 - Set stepper direction (0=left, 1=right)"));
   Serial.println(F("  SERVO1,0/1 - Control servo 1 (digital)"));
-  Serial.println(F("  SERVO2,0/1 - Control servo 2 (digital)"));
   Serial.println(F("  PUMP,0/1 - Control pump"));
   Serial.println(F("  DC,0/1 - Enable/disable DC motor"));
   Serial.println(F("  NEMA17 outputs: pins 8,9,10,11"));
   Serial.println(F("  IR sensors: pins 4,5,6"));
   Serial.println(F("  DC enable: pin 7, Pump: pin 12"));
-  Serial.println(F("  Servos: A0,A1 (digital)"));
+  Serial.println(F("  Servo: A0 (digital)"));
   
   // Clear buffer
   memset(serialBuffer, 0, sizeof(serialBuffer));
