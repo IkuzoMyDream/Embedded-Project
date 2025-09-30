@@ -14,7 +14,7 @@
  *   Pins 4,5,6 -> IR Sensors 1,2,3
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
- *   Pin A0 -> Servo 1 (Digital output)
+ *   Pin A0 -> Servo 1 (Digital output) 
  *
  * Serial Protocol:
  *   NodeMCU -> Arduino: "STEP,0/1" or "SERVO1,0/1" or "PUMP,0/1" or "DC,0/1"
@@ -31,16 +31,15 @@
 
 #include <Arduino.h>
 #include <SoftwareSerial.h>
+#include <Stepper.h>
 
 // ---------- Communication pins ----------
 const uint8_t PIN_RX = 2;  // Arduino receives from NodeMCU TX
 const uint8_t PIN_TX = 3;  // Arduino sends to NodeMCU RX
 
-// ---------- NEMA17 Stepper motor pins ----------
-const uint8_t PIN_STEP_OUT1 = 8;   // NEMA17 output 1
-const uint8_t PIN_STEP_OUT2 = 9;   // NEMA17 output 2  
-const uint8_t PIN_STEP_OUT3 = 10;  // NEMA17 output 3
-const uint8_t PIN_STEP_OUT4 = 11;  // NEMA17 output 4
+// ---------- NEMA17 Stepper motor configuration ----------
+const int stepsPerRevolution = 200;  // Steps per revolution for NEMA17
+Stepper myStepper(stepsPerRevolution, 8, 9, 10, 11);  // Initialize stepper on pins 8-11
 
 // ---------- IR Sensor pins ----------
 const uint8_t PIN_IR_SENSOR1 = 4;  // IR sensor 1
@@ -65,7 +64,10 @@ bool lastIRSensor2State = false;
 bool lastIRSensor3State = false;
 bool dcState = false;
 bool pumpState = false;
-uint8_t stepperDirection = 0; // 0 = left, 1 = right
+bool stepperRunning = false;  // Track if stepper should be running
+int stepperDirection = 0;     // 0 = clockwise, 1 = counterclockwise
+unsigned long lastStepTime = 0;
+const unsigned long stepInterval = 100; // Step every 100ms for continuous movement
 
 // ---------- Servo state tracking ----------
 bool servo1_state = false;  // Digital servo state
@@ -93,11 +95,8 @@ void triggerServo1() {
 
 // ---------- Actuator control functions ----------
 void setupActuators() {
-  // Setup NEMA17 stepper outputs
-  pinMode(PIN_STEP_OUT1, OUTPUT);
-  pinMode(PIN_STEP_OUT2, OUTPUT);
-  pinMode(PIN_STEP_OUT3, OUTPUT);
-  pinMode(PIN_STEP_OUT4, OUTPUT);
+  // Setup stepper motor speed
+  myStepper.setSpeed(60);  // Set speed to 60 RPM
   
   // Setup IR sensors as inputs
   pinMode(PIN_IR_SENSOR1, INPUT_PULLUP);
@@ -111,10 +110,6 @@ void setupActuators() {
   pinMode(PIN_DC_EN, OUTPUT);
   
   // Initialize to safe states
-  digitalWrite(PIN_STEP_OUT1, LOW);
-  digitalWrite(PIN_STEP_OUT2, LOW);
-  digitalWrite(PIN_STEP_OUT3, LOW);
-  digitalWrite(PIN_STEP_OUT4, LOW);
   digitalWrite(PIN_SERVO1, LOW);
   digitalWrite(PIN_PUMP, LOW);
   digitalWrite(PIN_DC_EN, LOW);
@@ -124,31 +119,21 @@ void setupActuators() {
   lastIRSensor2State = digitalRead(PIN_IR_SENSOR2);
   lastIRSensor3State = digitalRead(PIN_IR_SENSOR3);
   
-  stepperDirection = 0; // Initialize to left (0)
+  stepperDirection = 0; // Initialize to clockwise (0)
   servo1_state = false;
+  stepperRunning = false;
 }
 
 void setStepDirection(uint8_t direction) {
-  stepperDirection = direction; // Store direction: 0=left, 1=right
+  stepperDirection = direction; // Store direction: 0=clockwise, 1=counterclockwise
+  stepperRunning = true;        // Start continuous stepping
   
   if (direction == 0) {
-    // Turn left - set NEMA17 outputs for counter-clockwise
-    Serial.println("[STEP] Direction: LEFT (0)");
-    nodeSerial.println("[STEP] Direction: LEFT (0)");
-    // Example pattern for left rotation:
-    digitalWrite(PIN_STEP_OUT1, HIGH);
-    digitalWrite(PIN_STEP_OUT2, LOW);
-    digitalWrite(PIN_STEP_OUT3, LOW);
-    digitalWrite(PIN_STEP_OUT4, LOW);
+    Serial.println("[STEP] Direction: CLOCKWISE (0) - Starting continuous rotation");
+    nodeSerial.println("[STEP] Direction: CLOCKWISE (0) - Starting continuous rotation");
   } else {
-    // Turn right - set NEMA17 outputs for clockwise  
-    Serial.println("[STEP] Direction: RIGHT (1)");
-    nodeSerial.println("[STEP] Direction: RIGHT (1)");
-    // Example pattern for right rotation:
-    digitalWrite(PIN_STEP_OUT1, LOW);
-    digitalWrite(PIN_STEP_OUT2, HIGH);
-    digitalWrite(PIN_STEP_OUT3, LOW);
-    digitalWrite(PIN_STEP_OUT4, LOW);
+    Serial.println("[STEP] Direction: COUNTERCLOCKWISE (1) - Starting continuous rotation");  
+    nodeSerial.println("[STEP] Direction: COUNTERCLOCKWISE (1) - Starting continuous rotation");
   }
 }
 
@@ -168,6 +153,28 @@ void setDcState(bool on) {
   Serial.println(on ? 1 : 0);
   nodeSerial.print("[DC] Enable: ");
   nodeSerial.println(on ? 1 : 0);
+  
+  // When DC motor starts, stop the stepper motor
+  if (on) {
+    stepperRunning = false;
+    Serial.println("[STEP] Stopped due to DC motor activation");
+    nodeSerial.println("[STEP] Stopped due to DC motor activation");
+  }
+}
+
+void stepperLoop() {
+  // Continuous stepper movement when running
+  if (stepperRunning && (millis() - lastStepTime > stepInterval)) {
+    lastStepTime = millis();
+    
+    if (stepperDirection == 0) {
+      // Clockwise rotation
+      myStepper.step(10);  // Small step increment for smooth continuous motion
+    } else {
+      // Counterclockwise rotation  
+      myStepper.step(-10); // Negative for counterclockwise
+    }
+  }
 }
 
 void controlServo(int servoId, int state) {
@@ -344,8 +351,11 @@ void loop() {
     }
   }
   
+  // Handle continuous stepper motor movement
+  stepperLoop();
+  
   // Check IR sensor status
   checkIRSensors();
   
-  delay(20); // Small delay for sensor debouncing
+  delay(1); // Minimal delay for responsiveness
 }
