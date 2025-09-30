@@ -162,25 +162,25 @@ void checkIRSensors() {
   
   bool detected = false;
   
-  // Check the target room's IR sensor
+  // Check the target room's IR sensor (Detect when box LEAVES: LOW -> HIGH)
   if (targetRoom == 1) {
     bool current = digitalRead(PIN_IR_SENSOR1);
-    detected = current && !lastIRSensor1State;
+    detected = current && !lastIRSensor1State;  // Detect LOW -> HIGH (box removed)
     lastIRSensor1State = current;
   } else if (targetRoom == 2) {
     bool current = digitalRead(PIN_IR_SENSOR2);
-    detected = current && !lastIRSensor2State;
+    detected = current && !lastIRSensor2State;  // Detect LOW -> HIGH (box removed)
     lastIRSensor2State = current;
   } else if (targetRoom == 3) {
     bool current = digitalRead(PIN_IR_SENSOR3);
-    detected = current && !lastIRSensor3State;
+    detected = current && !lastIRSensor3State;  // Detect LOW -> HIGH (box removed)
     lastIRSensor3State = current;
   }
   
   if (detected) {
     Serial.print("[IR");
     Serial.print(targetRoom);
-    Serial.println("] DETECTED");
+    Serial.println("] DETECTED - Box removed from sensor!");
     stopOperation("IR_DETECTED");
   }
 }
