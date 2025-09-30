@@ -15,9 +15,23 @@
  *        disp/evt/2  -> { "queue_id":<int>, "done":1, "status":"success" }
  *        disp/state/2 (retained) -> { "online":1, "ready":1, "uptime":<sec> }
  *
+ * Target Room Mapping:
+ *   Room 1: STEP,0 (left) + no additional servos
+ *   Room 2: STEP,1 (right) + SERVO5,1  
+ *   Room 3: STEP,1 (right) + SERVO6,1 + PUMP,1
+ *
  * Serial Protocol with Arduino:
- *   Send: "DIR,L/R" or "SERVO5,1" or "SERVO6,1" or "PUMP,1/0" or "DC,1/0"
+ *   Send: "STEP,0/1" or "STEP_EN,0/1" or "SERVO5,1" or "SERVO6,1" or "PUMP,1/0" or "DC,1/0"
  *   Receive: "done" when Arduino completes operation
+ *   
+ *   Control Commands: 
+ *     STEP,0 = Turn Left
+ *     STEP,1 = Turn Right
+ *     STEP_EN,0 = Disable Stepper Motor
+ *     STEP_EN,1 = Enable Stepper Motor
+ *     DC,0/1 = Disable/Enable DC Motor (no direction control)
+ *     NEMA17 outputs on Arduino pins 8,9,10,11
+ *     Stepper enable on Arduino pin 7, DC enable on pin 13
  */
 
 #include <ESP8266WiFi.h>
@@ -63,7 +77,8 @@ uint32_t lastReadyPub = 0;
 // Arduino communication
 unsigned long cmdSentTime = 0;
 const unsigned long CMD_TIMEOUT_MS = 30000; // 30 seconds timeout
-String serialBuffer = "";
+char serialBuffer[64]; // Fixed size buffer instead of String
+uint8_t bufferIndex = 0;
 int pendingCommands = 0; // Track number of commands sent to Arduino
 
 // JSON/MQTT buffer
@@ -174,32 +189,39 @@ void sendToArduino(const String& command) {
   }
 }
 
-void processSerialResponse(const String& response) {
-  String resp = response;
-  resp.trim();
-  
-  if (resp.length() == 0) return;
+void processSerialResponse(const char* response) {
+  if (strlen(response) == 0) return;
   
   Serial.print("[ARDUINO] Response: ");
-  Serial.println(resp);
+  Serial.println(response);
   
-  if (resp.equalsIgnoreCase("done")) {
+  if (strcasecmp(response, "done") == 0) {
     pendingCommands--; // Decrement pending commands
     Serial.printf("[NODE] Arduino response received, pending: %d\n", pendingCommands);
     
     // Only complete the queue when all commands are done
     if (pendingCommands <= 0 && activeQueue >= 0) {
       Serial.printf("[NODE] All Arduino commands completed for queue %d\n", activeQueue);
+      
+      // Disable stepper motor after completion
+      arduinoSerial.println("STEP_EN,0");
+      delay(50); // Small delay for command processing
+      
       publishEvtDone(activeQueue, "success");
       activeQueue = -1;
       cmdSentTime = 0; // Clear timeout timer
       pendingCommands = 0; // Reset counter
       publishReady(true);
     }
-  } else if (resp.equalsIgnoreCase("sensor_done")) {
+  } else if (strcasecmp(response, "sensor_done") == 0) {
     // Handle sensor completion separately
     if (activeQueue >= 0) {
       Serial.printf("[NODE] Sensor completion for queue %d\n", activeQueue);
+      
+      // Disable stepper motor after sensor completion
+      arduinoSerial.println("STEP_EN,0");
+      delay(50); // Small delay for command processing
+      
       publishEvtDone(activeQueue, "success");
       activeQueue = -1;
       cmdSentTime = 0;
@@ -208,7 +230,7 @@ void processSerialResponse(const String& response) {
     }
   } else {
     // Handle other responses (sensor data, status, etc.)
-    Serial.printf("[NODE] Arduino data: %s\n", resp.c_str());
+    Serial.printf("[NODE] Arduino data: %s\n", response);
   }
 }
 
@@ -240,12 +262,15 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   Serial.printf("[NODE] Processing queue %d for target_room %d\n", queueId, targetRoom);
 
-  // Based on target_room, send commands to Arduino
-  // Direction: room 1 -> left (L), room 2/3 -> right (R)
+  // Enable stepper motor before movement
+  sendToArduino("STEP_EN,1");
+
+  // Based on target_room, send stepper commands to Arduino
+  // Use new 1-bit direction control: 0=left, 1=right
   if (targetRoom == 1) {
-    sendToArduino("DIR,L");
+    sendToArduino("STEP,0");  // Send 0 for left turn
   } else if (targetRoom == 2 || targetRoom == 3) {
-    sendToArduino("DIR,R");
+    sendToArduino("STEP,1");  // Send 1 for right turn
   }
 
   // Trigger room-specific actuators
@@ -281,6 +306,10 @@ void setup() {
   Serial.println("\n[NODE2] Production MQTT->Arduino bridge starting");
   Serial.println("[NODE2] Using SoftwareSerial - TX:D6(GPIO12), RX:D7(GPIO13)");
 
+  // Clear buffer
+  memset(serialBuffer, 0, sizeof(serialBuffer));
+  bufferIndex = 0;
+
   wifiEnsure();
   mqtt.setCallback(onMessage);
   mqttEnsure();
@@ -298,16 +327,16 @@ void loop() {
   while (arduinoSerial.available()) {
     char c = arduinoSerial.read();
     if (c == '\n' || c == '\r') {
-      if (serialBuffer.length() > 0) {
+      if (bufferIndex > 0) {
+        serialBuffer[bufferIndex] = '\0'; // null terminate
         processSerialResponse(serialBuffer);
-        serialBuffer = "";
+        bufferIndex = 0; // reset buffer
       }
+    } else if (bufferIndex < sizeof(serialBuffer) - 1) {
+      serialBuffer[bufferIndex++] = c;
     } else {
-      serialBuffer += c;
-      // Prevent buffer overflow
-      if (serialBuffer.length() > 200) {
-        serialBuffer = serialBuffer.substring(serialBuffer.length() - 200);
-      }
+      // Buffer overflow protection - reset
+      bufferIndex = 0;
     }
   }
 

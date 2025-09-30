@@ -87,55 +87,6 @@ def _both_nodes_ready_db(max_age_sec=10, debounce_ms=500):
     return ok(rows[0]) and ok(rows[1])
 
 
-def _upsert_node_state(node_id: int, online: int, ready: int, uptime: int | None):
-    """Update or insert node state in DB with change tracking"""
-    row = query("SELECT online, ready FROM node_status WHERE node_id=?", (node_id,))
-    now = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
-    if row:
-        prev_online, prev_ready = int(row[0]['online']), int(row[0]['ready'])
-        execute(
-            """UPDATE node_status
-               SET online=?, ready=?, uptime=?,
-                   last_seen=?,
-                   last_ready_change=CASE WHEN ?<>? THEN ? ELSE last_ready_change END,
-                   last_online_change=CASE WHEN ?<>? THEN ? ELSE last_online_change END
-             WHERE node_id=?""",
-            (online, ready, uptime, now,
-             ready, prev_ready, now,
-             online, prev_online, now,
-             node_id)
-        )
-    else:
-        execute(
-            """INSERT INTO node_status(node_id,online,ready,uptime,last_seen,last_ready_change,last_online_change)
-               VALUES(?,?,?,?,?,?,?)""",
-            (node_id, online, ready, uptime, now, now, now)
-        )
-
-
-def _both_nodes_ready_db(max_age_sec=10, debounce_ms=500):
-    """Check if both nodes are ready based on DB state with staleness and debounce checks"""
-    rows = query("""SELECT node_id, online, ready, last_seen, last_ready_change
-                    FROM node_status
-                    WHERE node_id IN (1,2)""")
-    if len(rows) < 2:
-        return False
-    now = datetime.utcnow()
-    def ok(r):
-        if int(r['online']) != 1 or int(r['ready']) != 1:
-            return False
-        if not r['last_seen']:
-            return False
-        ls = datetime.fromisoformat(r['last_seen'])
-        if (now - ls).total_seconds() > max_age_sec:
-            return False
-        lrc = datetime.fromisoformat(r['last_ready_change']) if r['last_ready_change'] else ls
-        if (now - lrc).total_seconds() < (debounce_ms/1000.0):
-            return False
-        return True
-    return ok(rows[0]) and ok(rows[1])
-
-
 def _handle_node_completion_atomic(qid, node_id, status, payload):
     """Atomically update SQLite DB when a node finishes a queue"""
     conn = get_conn()
