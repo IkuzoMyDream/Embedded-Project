@@ -53,6 +53,17 @@ CREATE TABLE IF NOT EXISTS events(
   FOREIGN KEY(queue_id) REFERENCES queues(id)
 );
 
+-- Node status tracking for DB-based readiness
+CREATE TABLE IF NOT EXISTS node_status (
+  node_id INTEGER PRIMARY KEY,
+  online  INTEGER NOT NULL DEFAULT 0,
+  ready   INTEGER NOT NULL DEFAULT 0,
+  uptime  INTEGER,
+  last_seen DATETIME,
+  last_ready_change DATETIME,
+  last_online_change DATETIME
+);
+
 /* seed */
 INSERT OR IGNORE INTO rooms(id,name) VALUES
  (1,'ห้องจ่ายยา 1'),

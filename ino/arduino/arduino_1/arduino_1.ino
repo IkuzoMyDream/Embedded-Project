@@ -1,150 +1,278 @@
-/* arduino_1.ino — Arduino controller for NodeMCU1 (logic inputs)
- * Role: read simple logic levels from NodeMCU and drive actuators.
+/* arduino_1.ino — Arduino controller for NodeMCU1 (SoftwareSerial communication)
+ * Role: Receive commands via SoftwareSerial from NodeMCU and control servos/actuators
+ * Communication: NodeMCU sends CSV commands, Arduino responds with "done"
  *
- * NodeMCU → Arduino INPUTS (keep your mapping):
- *   D1(GPIO5)  -> Arduino 2  (servo1 in)
- *   D2(GPIO4)  -> Arduino 3  (servo2 in)
- *   D5(GPIO14) -> Arduino 4  (servo3 in)
- *   D6(GPIO12) -> Arduino 5  (servo4 in)
- *   D7(GPIO13) -> Arduino 6  (dc enable in)
+ * Hardware connections:
+ *   NodeMCU TX (D6/GPIO12) -> Arduino Pin 2 (RX)
+ *   NodeMCU RX (D7/GPIO13) -> Arduino Pin 3 (TX)
+ *   GND -> GND
+ *   Both devices can be connected to USB separately for programming/monitoring
  *
  * Arduino OUTPUTS to actuators (you can wire to drivers/servos):
- *   Servo1 out -> 9
- *   Servo2 out -> 10
- *   Servo3 out -> 11
- *   Servo4 out -> 12
- *   DC_EN out  -> 8   (ON/OFF only)
- *   DC_DIR out -> 7   (fixed direction if you need it)
+ *   Servo1 out -> Pin 9  (pill_id = 1)
+ *   Servo2 out -> Pin 10 (pill_id = 2)
+ *   Servo3 out -> Pin 11 (pill_id = 3)
+ *   Servo4 out -> Pin 12 (pill_id = 4)
+ *   DC_EN out  -> Pin 8  (ON/OFF only)
  *
- * Notes:
- * - Common GND between NodeMCU and Arduino.
- * - Arduino drives drivers/servos; NodeMCU only provides logic cues.
+ * Pill ID Mapping:
+ *   pill_id 1 -> Servo 1 (Pin 9)
+ *   pill_id 2 -> Servo 2 (Pin 10)
+ *   pill_id 3 -> Servo 3 (Pin 11)
+ *   pill_id 4 -> Servo 4 (Pin 12)
+ *
+ * Serial Protocol:
+ *   NodeMCU -> Arduino: "queue_id,pill_id,quantity" or "DC,0/1" or "SERVO,id,pos"
+ *   Arduino -> NodeMCU: "done" when operation complete
  */
 
 #include <Arduino.h>
 #include <Servo.h>
+#include <SoftwareSerial.h>
 
-// ---------- Inputs from NodeMCU ----------
-const uint8_t PIN_IN_SERVO1 = 2;
-const uint8_t PIN_IN_SERVO2 = 3;
-const uint8_t PIN_IN_SERVO3 = 4;
-const uint8_t PIN_IN_SERVO4 = 5;
-const uint8_t PIN_IN_DC_EN  = 6;
+// ---------- Communication pins ----------
+const uint8_t PIN_RX = 2;  // Arduino receives from NodeMCU TX
+const uint8_t PIN_TX = 3;  // Arduino sends to NodeMCU RX
 
-// ---------- Outputs to actuators ----------
+// ---------- Servo outputs ---------- 
 const uint8_t PIN_SERVO1_OUT = 9;
 const uint8_t PIN_SERVO2_OUT = 10;
 const uint8_t PIN_SERVO3_OUT = 11;
 const uint8_t PIN_SERVO4_OUT = 12;
 
-const uint8_t PIN_DC_EN_OUT  = 8;  // ON/OFF enable line to your motor driver
-const uint8_t PIN_DC_DIR_OUT = 7;  // optional direction
+// ---------- DC motor outputs ----------
+const uint8_t PIN_DC_EN_OUT  = 8;  // ON/OFF enable line
+const uint8_t PIN_DC_DIR_OUT = 7;  // direction control
 
 // ---------- Servo positions ----------
-const uint8_t SERVO_CLOSED = 0;    // adjust to your mechanics
-const uint8_t SERVO_OPEN   = 90;   // adjust to your mechanics
-
-// ---------- Poll interval ----------
-const unsigned long POLL_MS = 20;
+const uint8_t SERVO_CLOSED = 60;   // closed position
+const uint8_t SERVO_OPEN   = 120;  // open position
 
 // ---------- State ----------
 Servo servo1, servo2, servo3, servo4;
-bool last_in_servo1 = false;
-bool last_in_servo2 = false;
-bool last_in_servo3 = false;
-bool last_in_servo4 = false;
-bool last_in_dc     = false;
-unsigned long last_poll = 0;
+SoftwareSerial nodeSerial(PIN_RX, PIN_TX); // RX, TX for communication with NodeMCU
+char serialBuffer[64]; // Fixed size buffer instead of String
+uint8_t bufferIndex = 0;
+bool dc_state = false;
 
-// ---------- Helpers ----------
+// ---------- Servo state tracking ----------
+bool servo1_isLeft = false;  // false=ขวา(60°), true=ซ้าย(120°)
+bool servo2_isLeft = false;
+bool servo3_isLeft = false;
+bool servo4_isLeft = false;
+
+// ---------- Smooth servo movement function (Updated) ----------
+void smoothMove(Servo &servo, int startPos, int endPos) {
+  if (startPos < endPos) {
+    for (int pos = startPos; pos <= endPos; pos++) {
+      servo.write(pos);
+      delay(2);  // smooth movement
+    }
+  } else {
+    for (int pos = startPos; pos >= endPos; pos--) {
+      servo.write(pos);
+      delay(2);
+    }
+  }
+}
+
+// ---------- Servo logic control functions (IMPLEMENTED) ----------
+// Each servo has different toggle patterns for different pill types
+
+void servoLogic1(int pulses = 1) {
+  // Servo 1 - alternating right(60°)/left(120°) movement with state memory
+  for (int p = 0; p < pulses; p++) {
+    int currentPos = servo1.read();
+    
+    // Toggle state: ขวา(60°) <-> ซ้าย(120°)
+    servo1_isLeft = !servo1_isLeft;
+    int targetPos = servo1_isLeft ? 120 : 60;  // true=ซ้าย(120°), false=ขวา(60°)
+    
+    smoothMove(servo1, currentPos, targetPos);
+    delay(500); // หน่วงเวลาเปิด
+    
+    if (p < pulses - 1) {
+      delay(100); // pause between movements
+    }
+  }
+}
+
+void servoLogic2(int pulses = 1) {
+  // Servo 2 - alternating right(60°)/left(120°) movement with state memory
+  for (int p = 0; p < pulses; p++) {
+    int currentPos = servo2.read();
+    
+    // Toggle state: ขวา(60°) <-> ซ้าย(120°)
+    servo2_isLeft = !servo2_isLeft;
+    int targetPos = servo2_isLeft ? 120 : 60;
+    
+    smoothMove(servo2, currentPos, targetPos);
+    delay(700); // หน่วงเวลาเปิดนานกว่า servo1
+    
+    if (p < pulses - 1) {
+      delay(100);
+    }
+  }
+}
+
+void servoLogic3(int pulses = 1) {
+  // Servo 3 - alternating right(60°)/left(120°) movement with state memory
+  for (int p = 0; p < pulses; p++) {
+    int currentPos = servo3.read();
+    
+    // Toggle state: ขวา(60°) <-> ซ้าย(120°)
+    servo3_isLeft = !servo3_isLeft;
+    int targetPos = servo3_isLeft ? 120 : 60;
+    
+    smoothMove(servo3, currentPos, targetPos);
+    delay(300); // หน่วงเวลาเปิดสั้น
+    
+    if (p < pulses - 1) {
+      delay(100);
+    }
+  }
+}
+
+void servoLogic4(int pulses = 1) {
+  // Servo 4 - alternating right(60°)/left(120°) movement with state memory
+  for (int p = 0; p < pulses; p++) {
+    int currentPos = servo4.read();
+    
+    // Toggle state: ขวา(60°) <-> ซ้าย(120°)
+    servo4_isLeft = !servo4_isLeft;
+    int targetPos = servo4_isLeft ? 120 : 60;
+    
+    smoothMove(servo4, currentPos, targetPos);
+    delay(600); // หน่วงเวลาเปิดปานกลาง
+    
+    if (p < pulses - 1) {
+      delay(100);
+    }
+  }
+}
+
+// ---------- Actuator control functions ----------
 void setupActuators() {
   servo1.attach(PIN_SERVO1_OUT);
   servo2.attach(PIN_SERVO2_OUT);
   servo3.attach(PIN_SERVO3_OUT);
   servo4.attach(PIN_SERVO4_OUT);
 
-  // safe positions
-  servo1.write(SERVO_CLOSED);
-  servo2.write(SERVO_CLOSED);
-  servo3.write(SERVO_CLOSED);
-  servo4.write(SERVO_CLOSED);
+  // Initialize to starting positions (120° = ซ้าย = starting position)
+  servo1.write(120);  // 120° = ซ้าย
+  servo2.write(120);  // 120° = ซ้าย
+  servo3.write(120);  // 120° = ซ้าย
+  servo4.write(120);  // 120° = ซ้าย
+  
+  // Initialize state tracking (all start at ซ้าย = true)
+  servo1_isLeft = true;   // เริ่มที่ซ้าย (120°)
+  servo2_isLeft = true;   // เริ่มที่ซ้าย (120°)
+  servo3_isLeft = true;   // เริ่มที่ซ้าย (120°)
+  servo4_isLeft = true;   // เริ่มที่ซ้าย (120°)
 
   pinMode(PIN_DC_EN_OUT, OUTPUT);
   pinMode(PIN_DC_DIR_OUT, OUTPUT);
   digitalWrite(PIN_DC_EN_OUT, LOW);   // OFF
-  digitalWrite(PIN_DC_DIR_OUT, LOW);  // direction default
+  digitalWrite(PIN_DC_DIR_OUT, LOW);  // default direction
 }
 
-void handleServoChange(uint8_t idx, bool active) {
-  uint8_t pos = active ? SERVO_OPEN : SERVO_CLOSED;
-  switch (idx) {
-    case 1: servo1.write(pos); break;
-    case 2: servo2.write(pos); break;
-    case 3: servo3.write(pos); break;
-    case 4: servo4.write(pos); break;
+void setDcState(bool on) {
+  dc_state = on;
+  digitalWrite(PIN_DC_EN_OUT, on ? HIGH : LOW);
+  nodeSerial.println(on ? "DC:1" : "DC:0");
+}
+
+void controlServo(int servoId, int position) {
+  Servo* targetServo = nullptr;
+  
+  switch (servoId) {
+    case 1: targetServo = &servo1; break;
+    case 2: targetServo = &servo2; break;
+    case 3: targetServo = &servo3; break;
+    case 4: targetServo = &servo4; break;
+    default: return;
+  }
+  
+  int currentPos = targetServo->read();
+  smoothMove(*targetServo, currentPos, position);
+}
+
+void actuatePill(int queueId, int pillId, int quantity) {
+  // *** AUTO DC ON for any pill request ***
+  setDcState(true);
+  
+  // Direct mapping: pill_id = servo number with alternating movement logic
+  if (pillId >= 1 && pillId <= 4) {
+    // Execute servo-specific logic with quantity parameter
+    switch (pillId) {
+      case 1: servoLogic1(quantity); break;
+      case 2: servoLogic2(quantity); break;
+      case 3: servoLogic3(quantity); break;
+      case 4: servoLogic4(quantity); break;
+    }
+    
+    // *** AUTO DC OFF after dispensing complete ***
+    delay(10000); // wait 1 second for pills to fully dispense
+    setDcState(false);
   }
 }
 
-void handleDc(bool on) {
-  // ON/OFF only (you can add PWM later if you add a driver that needs it)
-  digitalWrite(PIN_DC_EN_OUT, on ? HIGH : LOW);
-}
-
-// Read digital input (NodeMCU drives 0/1)
-bool readInput(uint8_t pin) {
-  return digitalRead(pin) == HIGH;
+void processCommand(char* command) {
+  // Parse DC command: "DC,0" or "DC,1"
+  if (strncmp(command, "DC,", 3) == 0) {
+    int value = atoi(command + 3);
+    setDcState(value != 0);
+    nodeSerial.println("done");
+    return;
+  }
+  
+  // Parse SERVO command: "SERVO,id,position"
+  if (strncmp(command, "SERVO,", 6) == 0) {
+    int servoId, position;
+    if (sscanf(command + 6, "%d,%d", &servoId, &position) == 2) {
+      controlServo(servoId, position);
+      nodeSerial.println("done");
+      return;
+    }
+  }
+  
+  // Parse pill command: "queue_id,pill_id,quantity"
+  int queueId, pillId, quantity;
+  if (sscanf(command, "%d,%d,%d", &queueId, &pillId, &quantity) == 3) {
+    actuatePill(queueId, pillId, quantity);
+    nodeSerial.println("done");
+  }
 }
 
 // ---------- Setup / Loop ----------
 void setup() {
-  Serial.begin(115200);
-  delay(50);
-  Serial.println(F("[arduino1] starting controller"));
-
-  pinMode(PIN_IN_SERVO1, INPUT);
-  pinMode(PIN_IN_SERVO2, INPUT);
-  pinMode(PIN_IN_SERVO3, INPUT);
-  pinMode(PIN_IN_SERVO4, INPUT);
-  pinMode(PIN_IN_DC_EN,  INPUT);
-
+  Serial.begin(9600);     // USB Serial for monitoring
+  nodeSerial.begin(9600); // SoftwareSerial for NodeMCU communication
+  delay(200);
+  Serial.println(F("Arduino ready"));
+  
   setupActuators();
-
-  last_poll = millis();
+  
+  // Clear buffer
+  memset(serialBuffer, 0, sizeof(serialBuffer));
+  bufferIndex = 0;
 }
 
 void loop() {
-  if (millis() - last_poll < POLL_MS) return;
-  last_poll = millis();
-
-  bool in1  = readInput(PIN_IN_SERVO1);
-  bool in2  = readInput(PIN_IN_SERVO2);
-  bool in3  = readInput(PIN_IN_SERVO3);
-  bool in4  = readInput(PIN_IN_SERVO4);
-  bool inDc = readInput(PIN_IN_DC_EN);
-
-  if (in1 != last_in_servo1) {
-    last_in_servo1 = in1;
-    Serial.print(F("[in] servo1=")); Serial.println(in1 ? 1 : 0);
-    handleServoChange(1, in1);
-  }
-  if (in2 != last_in_servo2) {
-    last_in_servo2 = in2;
-    Serial.print(F("[in] servo2=")); Serial.println(in2 ? 1 : 0);
-    handleServoChange(2, in2);
-  }
-  if (in3 != last_in_servo3) {
-    last_in_servo3 = in3;
-    Serial.print(F("[in] servo3=")); Serial.println(in3 ? 1 : 0);
-    handleServoChange(3, in3);
-  }
-  if (in4 != last_in_servo4) {
-    last_in_servo4 = in4;
-    Serial.print(F("[in] servo4=")); Serial.println(in4 ? 1 : 0);
-    handleServoChange(4, in4);
-  }
-  if (inDc != last_in_dc) {
-    last_in_dc = inDc;
-    Serial.print(F("[in] dc=")); Serial.println(inDc ? 1 : 0);
-    handleDc(inDc);
+  // Read serial commands from NodeMCU via SoftwareSerial
+  while (nodeSerial.available()) {
+    char c = nodeSerial.read();
+    if (c == '\n' || c == '\r') {
+      if (bufferIndex > 0) {
+        serialBuffer[bufferIndex] = '\0'; // null terminate
+        processCommand(serialBuffer);
+        bufferIndex = 0; // reset buffer
+      }
+    } else if (bufferIndex < sizeof(serialBuffer) - 1) {
+      serialBuffer[bufferIndex++] = c;
+    } else {
+      // Buffer overflow protection - reset
+      bufferIndex = 0;
+    }
   }
 }

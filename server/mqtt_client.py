@@ -2,15 +2,16 @@ import json
 import logging
 import paho.mqtt.client as mqtt
 import time
+from datetime import datetime, timedelta
 from .config import MQTT_BROKER, MQTT_PORT, MQTT_CLIENT_ID, MQTT_TOPIC_ACK, MQTT_TOPIC_CMD, MQTT_TOPIC_EVT, MQTT_TOPIC_STATE
 from .db import execute, query, get_conn
 
 _logger = logging.getLogger(__name__)
 _client = None
 
-# in-memory node readiness (node_id -> bool)
+# in-memory node readiness (node_id -> bool) - kept for logging only
 _node_ready = {}
-# in-memory node online presence
+# in-memory node online presence - kept for logging only
 _node_online = {}
 
 
@@ -40,8 +41,57 @@ def on_connect(client, userdata, flags, rc, properties=None):
 
 
 def _check_both_nodes_ready():
-    """Check if both nodes are ready for new commands"""
+    """Check if both nodes are ready for new commands - kept for legacy logging only"""
     return _node_ready.get(1, False) and _node_ready.get(2, False)
+
+
+def _upsert_node_state(node_id: int, online: int, ready: int, uptime: int | None):
+    """Update or insert node state in DB with change tracking"""
+    row = query("SELECT online, ready FROM node_status WHERE node_id=?", (node_id,))
+    now = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
+    if row:
+        prev_online, prev_ready = int(row[0]['online']), int(row[0]['ready'])
+        execute(
+            """UPDATE node_status
+               SET online=?, ready=?, uptime=?,
+                   last_seen=?,
+                   last_ready_change=CASE WHEN ?<>? THEN ? ELSE last_ready_change END,
+                   last_online_change=CASE WHEN ?<>? THEN ? ELSE last_online_change END
+             WHERE node_id=?""",
+            (online, ready, uptime, now,
+             ready, prev_ready, now,
+             online, prev_online, now,
+             node_id)
+        )
+    else:
+        execute(
+            """INSERT INTO node_status(node_id,online,ready,uptime,last_seen,last_ready_change,last_online_change)
+               VALUES(?,?,?,?,?,?,?)""",
+            (node_id, online, ready, uptime, now, now, now)
+        )
+
+
+def _both_nodes_ready_db(max_age_sec=10, debounce_ms=500):
+    """Check if both nodes are ready based on DB state with staleness and debounce checks"""
+    rows = query("""SELECT node_id, online, ready, last_seen, last_ready_change
+                    FROM node_status
+                    WHERE node_id IN (1,2)""")
+    if len(rows) < 2:
+        return False
+    now = datetime.utcnow()
+    def ok(r):
+        if int(r['online']) != 1 or int(r['ready']) != 1:
+            return False
+        if not r['last_seen']:
+            return False
+        ls = datetime.fromisoformat(r['last_seen'])
+        if (now - ls).total_seconds() > max_age_sec:
+            return False
+        lrc = datetime.fromisoformat(r['last_ready_change']) if r['last_ready_change'] else ls
+        if (now - lrc).total_seconds() < (debounce_ms/1000.0):
+            return False
+        return True
+    return ok(rows[0]) and ok(rows[1])
 
 
 def _handle_node_completion_atomic(qid, node_id, status, payload):
@@ -104,19 +154,24 @@ def _handle_node_completion_atomic(qid, node_id, status, payload):
         # Commit transaction
         conn.commit()
         
-        # After commit: mark in-memory _node_ready[node_id] = True
+        # After commit: mark in-memory _node_ready[node_id] = True (legacy logging only)
         _node_ready[node_id] = True
         _logger.info('Node%s marked ready after completing queue %s', node_id, qid)
         
-        # 3. When both nodes send evt_done (success):
-        # -> update queue.status = 'success', served_at=NOW (done above)
-        # -> mark _node_ready[1] = True, _node_ready[2] = True (done above)
-        # -> trigger _dispatch_next_queue again
-        if node1_done and node2_done and _check_both_nodes_ready():
+        # 3. When both nodes send evt_done: trigger next dispatch if both ready per DB
+        if node1_done and node2_done:
             global _client
             if _client:
-                _logger.info('Both nodes completed queue %s - triggering next dispatch', qid)
-                _dispatch_next_queue(_client)
+                _logger.info('Both nodes completed queue %s - checking DB readiness for next dispatch', qid)
+                try:
+                    # Use DB-based check for dispatch decision
+                    if _both_nodes_ready_db():
+                        _logger.info('Both nodes ready (DB) - triggering next dispatch')
+                        _dispatch_next_queue(_client)
+                    else:
+                        _logger.info('Both nodes completed but not ready (DB) - waiting for readiness')
+                except Exception as e:
+                    _logger.exception('Failed to dispatch next queue after completion: %s', e)
             
     except Exception as e:
         conn.rollback()
@@ -159,10 +214,14 @@ def _dispatch_next_queue(client):
             _logger.info('No pending queues to dispatch')
             return False
         
-        # Check if both nodes are ready before attempting dispatch
-        if not _check_both_nodes_ready():
-            _logger.info('Dispatch skipped - Nodes not both ready - Node1: %s, Node2: %s', 
-                         _node_ready.get(1, False), _node_ready.get(2, False))
+        # Check if both nodes are ready before attempting dispatch (DB-based)
+        if not _both_nodes_ready_db():
+            _logger.warning('Dispatch BLOCKED - Nodes not both ready (DB) - checking node_status table')
+            # Log current DB state for debugging
+            db_status = query("SELECT node_id, online, ready, last_seen FROM node_status WHERE node_id IN (1,2)")
+            for status in db_status:
+                _logger.info('Node %s DB state: online=%s ready=%s last_seen=%s', 
+                           status['node_id'], status['online'], status['ready'], status['last_seen'])
             return False
             
         q = pending_queues[0]
@@ -321,22 +380,28 @@ def on_message(client, userdata, msg):
 
         # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')
         if 'ready' in payload or 'online' in payload:
-            # interpret online / ready separately
             online = int(payload.get('online', 0))
-            ready = int(payload.get('ready', 0))
-            if node_id is not None:
-                _node_online[node_id] = bool(online)
-                _node_ready[node_id] = bool(ready)
-                # record both values in events for debugging/audit
-                execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)", (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
-                _logger.info('Node %s reported online=%s ready=%s', node_id, online, ready)
-                
-                # Debug: show current ready states
-                _logger.info('Current ready states - Node1: %s, Node2: %s', 
-                           _node_ready.get(1, False), _node_ready.get(2, False))
+            ready  = int(payload.get('ready', 0))
+            uptime = int(payload.get('uptime', 0)) if 'uptime' in payload else None
 
-                # NOTE: Don't auto-dispatch here to prevent multiple in_progress queues
-                # Dispatch only happens after both nodes complete a queue
+            if node_id is not None:
+                # persist to DB
+                _upsert_node_state(node_id, online, ready, uptime)
+                # keep event log
+                execute("INSERT INTO events(queue_id, event, message) VALUES(?,?,?)",
+                        (None, 'node_state', json.dumps({'node': node_id, 'online': online, 'ready': ready})))
+                _logger.info('Node %s (DB) online=%s ready=%s', node_id, online, ready)
+
+                # Auto-dispatch when both ready (per DB), no in_progress, and pending exists
+                try:
+                    has_inprog = query("SELECT 1 x FROM queues WHERE status='in_progress' LIMIT 1")
+                    if _both_nodes_ready_db() and not has_inprog:
+                        has_pending = query("SELECT 1 x FROM queues WHERE status='pending' LIMIT 1")
+                        if has_pending:
+                            _logger.info('STATE auto-dispatch: both-ready (DB) & pending exists -> dispatch')
+                            _dispatch_next_queue(client)
+                except Exception as e:
+                    _logger.warning('STATE auto-dispatch failed: %s', e)
             return
 
         # Unknown payload: try to log with optional queue_id
@@ -388,8 +453,24 @@ def get_client():
             except Exception as e:
                 _logger.warning('Initial dispatch failed: %s', e)
         
+        # Readiness watchdog thread (defensive)
+        def readiness_watchdog():
+            import time
+            while True:
+                try:
+                    has_inprog = query("SELECT 1 x FROM queues WHERE status='in_progress' LIMIT 1")
+                    if _both_nodes_ready_db() and not has_inprog:
+                        has_pending = query("SELECT 1 x FROM queues WHERE status='pending' LIMIT 1")
+                        if has_pending:
+                            _logger.info('Watchdog: both-ready (DB), pending exists -> dispatch')
+                            _dispatch_next_queue(c)
+                except Exception as e:
+                    _logger.warning('Watchdog error: %s', e)
+                time.sleep(2)
+        
         import threading
         threading.Thread(target=delayed_initial_dispatch, daemon=True).start()
+        threading.Thread(target=readiness_watchdog, daemon=True).start()
         
         return _client
     except Exception as e:

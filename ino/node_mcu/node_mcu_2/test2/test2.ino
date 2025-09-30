@@ -132,11 +132,6 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   activeQueue = queueId;
   cmdSentTime = millis(); // Start timeout timer
 
-  // TEST: Add 5 second delay for Node 2
-  Serial.printf("[TEST] Node2 waiting 5 seconds for queue %d...\n", activeQueue);
-  delay(5000);
-  Serial.printf("[TEST] Node2 delay complete, processing queue %d\n", activeQueue);
-
   // Based on target_room, instruct Arduino: set stepper direction, trigger servos/pump
   // Direction: room 1 -> left (L), room 2/3 -> right (R)
   if (target_room == 1) {
@@ -153,18 +148,17 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Serial.println("PUMP,1");
   }
 
+  if (d.containsKey("force")) {
+      Serial.printf("[node1] Arduino done for queue %d\n", activeQueue);
+      publishEvt(activeQueue, 0, "success");
+      g_ready = true;
+      activeQueue = -1;
+      cmdSentTime = 0; // Clear timeout timer
+      publishStateCombined(false);
+  }
+
   // always trigger DC after a disp command
   Serial.println("DC,1");
-
-  // TEST: Simulate processing and send success immediately
-  Serial.printf("[TEST] Node2 simulating actuator control for queue %d target_room=%d\n", activeQueue, target_room);
-  
-  // TEST: Immediately send success after delay (don't wait for Arduino "done")
-  Serial.printf("[TEST] Node2 sending success for queue %d\n", activeQueue);
-  publishEvt(activeQueue, 1, "success");
-  g_ready = true;
-  activeQueue = -1;
-  cmdSentTime = 0;
   publishStateCombined(false);
 }
 
