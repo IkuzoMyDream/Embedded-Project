@@ -106,6 +106,21 @@ void setupHardware() {
   Serial.println("[HARDWARE] Setup complete");
 }
 
+// ---------- Emergency stop all motors ----------
+void emergencyStopAll() {
+  // Force stop everything immediately
+  digitalWrite(PIN_DC_EN, LOW);    // DC motor OFF
+  digitalWrite(PIN_PUMP, LOW);     // Pump OFF
+  digitalWrite(PIN_SERVO1, LOW);   // Servo OFF
+  
+  // Reset operation state
+  isOperating = false;
+  targetRoom = -1;
+  stepDirection = 0;
+  
+  Serial.println("[EMERGENCY] All systems stopped!");
+}
+
 // ---------- Operation control ----------
 void startOperation(int room, int direction) {
   isOperating = true;
@@ -125,6 +140,16 @@ void stopOperation(const char* reason) {
   isOperating = false;
   Serial.print("[OP] Stopped - ");
   Serial.println(reason);
+  
+  // Stop ALL motors and actuators immediately
+  setDC(false);          // Stop DC motor
+  setPump(false);        // Stop pump
+  digitalWrite(PIN_SERVO1, LOW);  // Stop servo
+  
+  // Note: Stepper motor will stop automatically in stepperLoop() 
+  // when isOperating = false
+  
+  Serial.println("[SYSTEM] All motors and actuators stopped");
   
   // Send done to NodeMCU
   nodeSerial.println("done");
@@ -277,6 +302,14 @@ void processCommand(char* command) {
   // Stop operation
   if (strncmp(command, "STOP", 4) == 0 || strncmp(command, "RESET", 5) == 0) {
     stopOperation("MANUAL_STOP");
+    Serial.println("ack");
+    nodeSerial.println("ack");
+    return;
+  }
+  
+  // Emergency stop all
+  if (strncmp(command, "EMERGENCY", 9) == 0) {
+    emergencyStopAll();
     Serial.println("ack");
     nodeSerial.println("ack");
     return;
