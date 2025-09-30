@@ -18,10 +18,10 @@
  * Target Room Mapping:
  *   Room 1: STEP,0 (left) + no additional servos
  *   Room 2: STEP,1 (right) + SERVO5,1  
- *   Room 3: STEP,1 (right) + SERVO6,1 + PUMP,1
+ *   Room 3: STEP,1 (right) + PUMP,1 (no servo)
  *
  * Serial Protocol with Arduino:
- *   Send: "STEP,0/1" or "SERVO5,1" or "SERVO6,1" or "PUMP,1/0" or "DC,1/0"
+ *   Send: "STEP,0/1" or "SERVO5,1" or "PUMP,1/0" or "DC,1/0"
  *   Receive: "done" when Arduino completes operation
  *   
  *   Control Commands: 
@@ -268,8 +268,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   if (targetRoom == 2) {
     sendToArduino("SERVO5,1");
   } else if (targetRoom == 3) {
-    sendToArduino("SERVO6,1");
-    sendToArduino("PUMP,1");
+    sendToArduino("PUMP,1");  // Room 3 only has pump, no SERVO6
   }
 
   // Force completion for testing

@@ -11,22 +11,24 @@
  * Pin Assignments:
  *   Pins 8,9,10,11 -> NEMA17 Stepper Motor Outputs
  *   Pins 2,3 -> TX/RX Communication
-  *   Pins 4,5,6 -> IR Sensors 1,2,3
+ *   Pins 4,5,6 -> IR Sensors 1,2,3
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
  *   Pin A0 -> Servo 1 (Digital output) 
  *
  * Serial Protocol:
- *   NodeMCU -> Arduino: "STEP,0/1" or "SERVO1,0/1" or "PUMP,0/1" or "DC,0/1"
- *   Arduino -> NodeMCU: "done" when operation complete
+ *   NodeMCU -> Arduino: "ROOM,1/2/3" or "STEP,0/1" or "SERVO1,0/1" or "SERVO5,1" or "PUMP,0/1" or "DC,0/1"
+ *   Arduino -> NodeMCU: "ack" for command acknowledgment, "done" when IR detection complete
  *   
  *   Control Scheme:
- *     STEP,0 = Turn Left (Counter-clockwise)
- *     STEP,1 = Turn Right (Clockwise)
+ *     ROOM,1/2/3 = Set target room for IR detection
+ *     STEP,0 = Turn Clockwise (0)
+ *     STEP,1 = Turn Counterclockwise (1)
  *     SERVO1,0/1 = Digital servo control
- *     DC,0/1 = Disable/Enable DC Motor
+ *     SERVO5,1 = Legacy mapping to SERVO1
+ *     DC,0/1 = Disable/Enable DC Motor (stops stepper when enabled)
  *     PUMP,0/1 = Disable/Enable Pump
- *     IR sensors report detection automatically
+ *     IR sensors report detection automatically for active target room
  */
 
 #include <Arduino.h>
@@ -286,16 +288,9 @@ void processCommand(char* command) {
     return;
   }
   
-  // Legacy SERVO5/SERVO6 support
+  // Legacy SERVO5 support
   if (strncmp(command, "SERVO5,", 7) == 0) {
     triggerServo1(); // Map SERVO5 to SERVO1
-    Serial.println("ack");
-    nodeSerial.println("ack");
-    return;
-  }
-  
-  if (strncmp(command, "SERVO6,", 7) == 0) {
-    triggerServo1(); // Map SERVO6 to SERVO1 (only servo available)
     Serial.println("ack");
     nodeSerial.println("ack");
     return;
@@ -395,8 +390,10 @@ void setup() {
   setupActuators();
   
   Serial.println(F("[ARDUINO2] Commands:"));
-  Serial.println(F("  STEP,0/1 - Set stepper direction (0=left, 1=right)"));
+  Serial.println(F("  ROOM,1/2/3 - Set target room for IR detection"));
+  Serial.println(F("  STEP,0/1 - Set stepper direction (0=clockwise, 1=counterclockwise)"));
   Serial.println(F("  SERVO1,0/1 - Control servo 1 (digital)"));
+  Serial.println(F("  SERVO5,1 - Legacy servo mapping (to SERVO1)"));
   Serial.println(F("  PUMP,0/1 - Control pump"));
   Serial.println(F("  DC,0/1 - Enable/disable DC motor"));
   Serial.println(F("  NEMA17 outputs: pins 8,9,10,11"));
