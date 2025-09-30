@@ -10,25 +10,23 @@
  *
  * Pin Assignments:
  *   Pins 8,9,10,11 -> NEMA17 Stepper Motor Outputs
- *   Pin 12 -> NEMA17 Control Pin
  *   Pins 2,3 -> TX/RX Communication
  *   Pins 4,5,6 -> IR Sensors 1,2,3
  *   Pin 7 -> DC Motor Enable
+ *   Pin 12 -> Pump
  *   Pin A0 -> Servo 1 (Digital output)
  *   Pin A1 -> Servo 2 (Digital output)
- *   Pin A2 -> Pump (Digital output)
  *
  * Serial Protocol:
- *   NodeMCU -> Arduino: "STEP,0/1" or "STEP_EN,0/1" or "SERVO1,0/1" or "SERVO2,0/1" or "PUMP,0/1" or "DC,0/1"
+ *   NodeMCU -> Arduino: "STEP,0/1" or "SERVO1,0/1" or "SERVO2,0/1" or "PUMP,0/1" or "DC,0/1"
  *   Arduino -> NodeMCU: "done" when operation complete
  *   
  *   Control Scheme:
  *     STEP,0 = Turn Left (Counter-clockwise)
  *     STEP,1 = Turn Right (Clockwise)
- *     STEP_EN,0 = Disable Stepper Motor
- *     STEP_EN,1 = Enable Stepper Motor
  *     SERVO1/2,0/1 = Digital servo control
  *     DC,0/1 = Disable/Enable DC Motor
+ *     PUMP,0/1 = Disable/Enable Pump
  *     IR sensors report detection automatically
  */
 
@@ -44,7 +42,6 @@ const uint8_t PIN_STEP_OUT1 = 8;   // NEMA17 output 1
 const uint8_t PIN_STEP_OUT2 = 9;   // NEMA17 output 2  
 const uint8_t PIN_STEP_OUT3 = 10;  // NEMA17 output 3
 const uint8_t PIN_STEP_OUT4 = 11;  // NEMA17 output 4
-const uint8_t PIN_STEP_CONTROL = 12; // NEMA17 control pin
 
 // ---------- IR Sensor pins ----------
 const uint8_t PIN_IR_SENSOR1 = 4;  // IR sensor 1
@@ -53,9 +50,9 @@ const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3
 
 // ---------- Other actuator pins ----------
 const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
+const uint8_t PIN_PUMP = 12;       // Pump 
 const uint8_t PIN_SERVO1 = A0;     // Servo 1 (digital output on analog pin)
 const uint8_t PIN_SERVO2 = A1;     // Servo 2 (digital output on analog pin)
-const uint8_t PIN_PUMP = A2;       // Pump (digital output on analog pin)
 
 // ---------- Servo positions ----------
 const uint8_t SERVO_CLOSED = 60;   // closed position
@@ -70,7 +67,6 @@ bool lastIRSensor2State = false;
 bool lastIRSensor3State = false;
 bool dcState = false;
 bool pumpState = false;
-bool stepperEnabled = false;   // Stepper motor enable state
 uint8_t stepperDirection = 0; // 0 = left, 1 = right
 
 // ---------- Servo state tracking ----------
@@ -115,12 +111,11 @@ void triggerServo2() {
 
 // ---------- Actuator control functions ----------
 void setupActuators() {
-  // Setup NEMA17 stepper outputs and control
+  // Setup NEMA17 stepper outputs
   pinMode(PIN_STEP_OUT1, OUTPUT);
   pinMode(PIN_STEP_OUT2, OUTPUT);
   pinMode(PIN_STEP_OUT3, OUTPUT);
   pinMode(PIN_STEP_OUT4, OUTPUT);
-  pinMode(PIN_STEP_CONTROL, OUTPUT);
   
   // Setup IR sensors as inputs
   pinMode(PIN_IR_SENSOR1, INPUT_PULLUP);
@@ -139,7 +134,6 @@ void setupActuators() {
   digitalWrite(PIN_STEP_OUT2, LOW);
   digitalWrite(PIN_STEP_OUT3, LOW);
   digitalWrite(PIN_STEP_OUT4, LOW);
-  digitalWrite(PIN_STEP_CONTROL, LOW);
   digitalWrite(PIN_SERVO1, LOW);
   digitalWrite(PIN_SERVO2, LOW);
   digitalWrite(PIN_PUMP, LOW);
@@ -151,7 +145,6 @@ void setupActuators() {
   lastIRSensor3State = digitalRead(PIN_IR_SENSOR3);
   
   stepperDirection = 0; // Initialize to left (0)
-  stepperEnabled = false; // Initialize stepper disabled
   servo1_state = false;
   servo2_state = false;
 }
@@ -159,48 +152,46 @@ void setupActuators() {
 void setStepDirection(uint8_t direction) {
   stepperDirection = direction; // Store direction: 0=left, 1=right
   
-  // Only set outputs if stepper is enabled
-  if (stepperEnabled) {
-    if (direction == 0) {
-      // Turn left - set NEMA17 outputs for counter-clockwise
-      Serial.println("[STEP] Direction: LEFT (0)");
-      nodeSerial.println("[STEP] Direction: LEFT (0)");
-      // Example pattern for left rotation:
-      digitalWrite(PIN_STEP_OUT1, HIGH);
-      digitalWrite(PIN_STEP_OUT2, LOW);
-      digitalWrite(PIN_STEP_OUT3, LOW);
-      digitalWrite(PIN_STEP_OUT4, LOW);
-    } else {
-      // Turn right - set NEMA17 outputs for clockwise  
-      Serial.println("[STEP] Direction: RIGHT (1)");
-      nodeSerial.println("[STEP] Direction: RIGHT (1)");
-      // Example pattern for right rotation:
-      digitalWrite(PIN_STEP_OUT1, LOW);
-      digitalWrite(PIN_STEP_OUT2, HIGH);
-      digitalWrite(PIN_STEP_OUT3, LOW);
-      digitalWrite(PIN_STEP_OUT4, LOW);
-    }
+  if (direction == 0) {
+    // Turn left - set NEMA17 outputs for counter-clockwise
+    Serial.println("[STEP] Direction: LEFT (0)");
+    nodeSerial.println("[STEP] Direction: LEFT (0)");
+    // Example pattern for left rotation:
+    digitalWrite(PIN_STEP_OUT1, HIGH);
+    digitalWrite(PIN_STEP_OUT2, LOW);
+    digitalWrite(PIN_STEP_OUT3, LOW);
+    digitalWrite(PIN_STEP_OUT4, LOW);
   } else {
-    Serial.println("[STEP] Direction set but stepper disabled");
-    nodeSerial.println("[STEP] Direction set but stepper disabled");
+    // Turn right - set NEMA17 outputs for clockwise  
+    Serial.println("[STEP] Direction: RIGHT (1)");
+    nodeSerial.println("[STEP] Direction: RIGHT (1)");
+    // Example pattern for right rotation:
+    digitalWrite(PIN_STEP_OUT1, LOW);
+    digitalWrite(PIN_STEP_OUT2, HIGH);
+    digitalWrite(PIN_STEP_OUT3, LOW);
+    digitalWrite(PIN_STEP_OUT4, LOW);
   }
 }
 
-void setStepperEnable(bool enable) {
-  stepperEnabled = enable;
-  digitalWrite(PIN_STEP_CONTROL, enable ? HIGH : LOW);
-  Serial.print("[STEP] Stepper Enable: ");
-  Serial.println(enable ? 1 : 0);
-  nodeSerial.print("[STEP] Stepper Enable: ");
-  nodeSerial.println(enable ? 1 : 0);
+void setStepDirection(uint8_t direction) {
+  stepperDirection = direction; // Store direction: 0=left, 1=right
   
-  // If enabling, apply current direction
-  if (enable) {
-    setStepDirection(stepperDirection);
-  } else {
-    // If disabling, turn off all coils
-    digitalWrite(PIN_STEP_OUT1, LOW);
+  if (direction == 0) {
+    // Turn left - set NEMA17 outputs for counter-clockwise
+    Serial.println("[STEP] Direction: LEFT (0)");
+    nodeSerial.println("[STEP] Direction: LEFT (0)");
+    // Example pattern for left rotation:
+    digitalWrite(PIN_STEP_OUT1, HIGH);
     digitalWrite(PIN_STEP_OUT2, LOW);
+    digitalWrite(PIN_STEP_OUT3, LOW);
+    digitalWrite(PIN_STEP_OUT4, LOW);
+  } else {
+    // Turn right - set NEMA17 outputs for clockwise  
+    Serial.println("[STEP] Direction: RIGHT (1)");
+    nodeSerial.println("[STEP] Direction: RIGHT (1)");
+    // Example pattern for right rotation:
+    digitalWrite(PIN_STEP_OUT1, LOW);
+    digitalWrite(PIN_STEP_OUT2, HIGH);
     digitalWrite(PIN_STEP_OUT3, LOW);
     digitalWrite(PIN_STEP_OUT4, LOW);
   }
@@ -261,15 +252,6 @@ void processCommand(char* command) {
   if (strncmp(command, "STEP,", 5) == 0) {
     uint8_t direction = atoi(command + 5);
     setStepDirection(direction);
-    Serial.println("done");
-    nodeSerial.println("done");
-    return;
-  }
-  
-  // Parse STEP_EN command: "STEP_EN,0" (disable) or "STEP_EN,1" (enable)
-  if (strncmp(command, "STEP_EN,", 8) == 0) {
-    uint8_t enable = atoi(command + 8);
-    setStepperEnable(enable != 0);
     Serial.println("done");
     nodeSerial.println("done");
     return;
@@ -401,15 +383,14 @@ void setup() {
   
   Serial.println(F("[ARDUINO2] Commands:"));
   Serial.println(F("  STEP,0/1 - Set stepper direction (0=left, 1=right)"));
-  Serial.println(F("  STEP_EN,0/1 - Enable/disable stepper motor"));
   Serial.println(F("  SERVO1,0/1 - Control servo 1 (digital)"));
   Serial.println(F("  SERVO2,0/1 - Control servo 2 (digital)"));
   Serial.println(F("  PUMP,0/1 - Control pump"));
   Serial.println(F("  DC,0/1 - Enable/disable DC motor"));
-  Serial.println(F("  NEMA17 outputs: pins 8,9,10,11, control pin 12"));
+  Serial.println(F("  NEMA17 outputs: pins 8,9,10,11"));
   Serial.println(F("  IR sensors: pins 4,5,6"));
-  Serial.println(F("  DC enable: pin 7"));
-  Serial.println(F("  Servos: A0,A1 (digital), Pump: A2"));
+  Serial.println(F("  DC enable: pin 7, Pump: pin 12"));
+  Serial.println(F("  Servos: A0,A1 (digital)"));
   
   // Clear buffer
   memset(serialBuffer, 0, sizeof(serialBuffer));

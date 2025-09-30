@@ -21,17 +21,16 @@
  *   Room 3: STEP,1 (right) + SERVO6,1 + PUMP,1
  *
  * Serial Protocol with Arduino:
- *   Send: "STEP,0/1" or "STEP_EN,0/1" or "SERVO5,1" or "SERVO6,1" or "PUMP,1/0" or "DC,1/0"
+ *   Send: "STEP,0/1" or "SERVO5,1" or "SERVO6,1" or "PUMP,1/0" or "DC,1/0"
  *   Receive: "done" when Arduino completes operation
  *   
  *   Control Commands: 
  *     STEP,0 = Turn Left
  *     STEP,1 = Turn Right
- *     STEP_EN,0 = Disable Stepper Motor
- *     STEP_EN,1 = Enable Stepper Motor
- *     DC,0/1 = Disable/Enable DC Motor (no direction control)
+ *     DC,0/1 = Disable/Enable DC Motor
+ *     PUMP,0/1 = Disable/Enable Pump
  *     NEMA17 outputs on Arduino pins 8,9,10,11
- *     Stepper enable on Arduino pin 7, DC enable on pin 13
+ *     Pump on Arduino pin 12
  */
 
 #include <ESP8266WiFi.h>
@@ -203,10 +202,6 @@ void processSerialResponse(const char* response) {
     if (pendingCommands <= 0 && activeQueue >= 0) {
       Serial.printf("[NODE] All Arduino commands completed for queue %d\n", activeQueue);
       
-      // Disable stepper motor after completion
-      arduinoSerial.println("STEP_EN,0");
-      delay(50); // Small delay for command processing
-      
       publishEvtDone(activeQueue, "success");
       activeQueue = -1;
       cmdSentTime = 0; // Clear timeout timer
@@ -217,10 +212,6 @@ void processSerialResponse(const char* response) {
     // Handle sensor completion separately
     if (activeQueue >= 0) {
       Serial.printf("[NODE] Sensor completion for queue %d\n", activeQueue);
-      
-      // Disable stepper motor after sensor completion
-      arduinoSerial.println("STEP_EN,0");
-      delay(50); // Small delay for command processing
       
       publishEvtDone(activeQueue, "success");
       activeQueue = -1;
@@ -262,11 +253,8 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   Serial.printf("[NODE] Processing queue %d for target_room %d\n", queueId, targetRoom);
 
-  // Enable stepper motor before movement
-  sendToArduino("STEP_EN,1");
-
   // Based on target_room, send stepper commands to Arduino
-  // Use new 1-bit direction control: 0=left, 1=right
+  // Use 1-bit direction control: 0=left, 1=right
   if (targetRoom == 1) {
     sendToArduino("STEP,0");  // Send 0 for left turn
   } else if (targetRoom == 2 || targetRoom == 3) {
