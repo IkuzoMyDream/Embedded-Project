@@ -323,16 +323,32 @@ void loop() {
   // Read serial commands from NodeMCU via SoftwareSerial
   while (nodeSerial.available()) {
     char c = nodeSerial.read();
+    
+    // Filter out invalid characters
+    if (c < 32 || c > 126) continue; // Only accept printable ASCII
+    
     if (c == '\n' || c == '\r') {
       if (bufferIndex > 0) {
         serialBuffer[bufferIndex] = '\0';
-        processCommand(serialBuffer);
+        
+        // Validate command format before processing
+        if (strlen(serialBuffer) >= 3 && strlen(serialBuffer) < 20) {
+          processCommand(serialBuffer);
+        } else {
+          Serial.print("[ERROR] Invalid command length: ");
+          Serial.println(serialBuffer);
+        }
+        
         bufferIndex = 0;
+        memset(serialBuffer, 0, sizeof(serialBuffer)); // Clear buffer
       }
     } else if (bufferIndex < sizeof(serialBuffer) - 1) {
       serialBuffer[bufferIndex++] = c;
     } else {
-      bufferIndex = 0; // Buffer overflow protection
+      // Buffer overflow protection - reset and report
+      Serial.println("[ERROR] Buffer overflow - resetting");
+      bufferIndex = 0;
+      memset(serialBuffer, 0, sizeof(serialBuffer));
     }
   }
   

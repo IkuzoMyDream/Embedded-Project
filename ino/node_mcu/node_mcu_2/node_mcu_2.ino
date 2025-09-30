@@ -181,11 +181,21 @@ void mqttEnsure() {
 void sendToArduino(const String& command) {
   Serial.print("[ARDUINO] Sending: ");
   Serial.println(command);
-  arduinoSerial.println(command); // Send to Arduino via SoftwareSerial
+  
+  // Add small delay before sending to prevent buffer issues
+  delay(10);
+  
+  arduinoSerial.print(command);
+  arduinoSerial.print('\n'); // Explicit newline
+  arduinoSerial.flush(); // Ensure data is sent
+  
   pendingCommands++; // Increment pending commands counter
   if (cmdSentTime == 0) {
     cmdSentTime = millis(); // Start timeout timer on first command
   }
+  
+  // Small delay after sending
+  delay(50);
 }
 
 void processSerialResponse(const char* response) {
@@ -255,6 +265,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // First, tell Arduino which room we're targeting
   sendToArduino("ROOM," + String(targetRoom));
+  delay(100); // Wait between commands
 
   // Based on target_room, send stepper commands to Arduino
   // Use 1-bit direction control: 0=left, 1=right
@@ -263,12 +274,15 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   } else if (targetRoom == 2 || targetRoom == 3) {
     sendToArduino("STEP,1");  // Send 1 for right turn
   }
+  delay(100); // Wait between commands
 
   // Trigger room-specific actuators
   if (targetRoom == 2) {
     sendToArduino("SERVO5,1");
+    delay(100);
   } else if (targetRoom == 3) {
     sendToArduino("PUMP,1");  // Room 3 only has pump, no SERVO6
+    delay(100);
   }
 
   // Force completion for testing
