@@ -23,6 +23,13 @@ def on_connect(client, userdata, flags, rc, properties=None):
         result_ack = client.subscribe(MQTT_TOPIC_ACK)
         result_evt = client.subscribe(MQTT_TOPIC_EVT) 
         result_state = client.subscribe(MQTT_TOPIC_STATE)
+        # subscribe to vision topic for camera reports
+        try:
+            from .config import MQTT_TOPIC_VISION
+            result_vision = client.subscribe(MQTT_TOPIC_VISION)
+            _logger.info('Subscribe results - VISION: %s', result_vision)
+        except Exception:
+            _logger.warning('VISION topic subscription failed to initialize')
         _logger.info('Subscribe results - ACK: %s, EVT: %s, STATE: %s', result_ack, result_evt, result_state)
         _logger.info('Successfully subscribed to MQTT topics')
     except Exception as e:
@@ -258,14 +265,58 @@ def on_message(client, userdata, msg):
             return
 
         # EVT: {"queue_id":..., "done":1, "status":"success", "room":<id>}
+        # Also handle vision events: {"queue_id":..., "done":1, "status":"vision_complete", "count_detected":X, "expected":Y}
         if 'done' in payload and int(payload.get('done', 0)) == 1:
             qid = payload.get('queue_id')
             st = payload.get('status', 'success').lower()
             if qid is None:
                 _logger.warning('EVT missing queue_id: %s', payload)
             else:
-                # Use atomic transaction to prevent race conditions
-                _handle_node_completion_atomic(qid, node_id, st, payload)
+                # Handle vision completion events specially
+                if st == 'vision_complete':
+                    try:
+                        detected = int(payload.get('count_detected', 0))
+                        expected = int(payload.get('expected', 0))
+                        if detected == expected:
+                            note = f"ตรวจนับถูกต้อง {detected}/{expected}"
+                        else:
+                            note = f"จำนวนไม่ตรง {detected}/{expected}"
+                        # write note to queues and insert event
+                        execute("UPDATE queues SET note=? WHERE id=?", (note, qid))
+                        execute("INSERT INTO events(queue_id,event,message) VALUES(?,?,?)", (qid, 'vision_check', note))
+                        _logger.info('Processed vision completion for queue %s: %s', qid, note)
+                    except Exception as e:
+                        _logger.exception('Failed to process vision completion: %s', e)
+                else:
+                    # Use atomic transaction for regular node completion
+                    _handle_node_completion_atomic(qid, node_id, st, payload)
+            return
+
+        # VISION: camera reports detection count
+        # Payload expected: {"count_detected": <int>, "queue_id": <int> (optional)}
+        if 'count_detected' in payload:
+            try:
+                qid = payload.get('queue_id')
+                detected = int(payload.get('count_detected'))
+                # If queue id not supplied, find the current in_progress queue
+                if qid is None:
+                    cur = query("SELECT id FROM queues WHERE status='in_progress' ORDER BY id ASC LIMIT 1")
+                    if not cur:
+                        _logger.info('Vision report received but no in_progress queue')
+                        return
+                    qid = cur[0]['id']
+                expected_row = query("SELECT COALESCE(SUM(quantity),0) AS total FROM queue_items WHERE queue_id=?", (qid,))
+                expected = expected_row[0]['total'] if expected_row else 0
+                if detected == expected:
+                    note = f"ตรวจนับถูกต้อง {detected}/{expected}"
+                else:
+                    note = f"จำนวนไม่ตรง {detected}/{expected}"
+                # write note to queues and insert event
+                execute("UPDATE queues SET note=? WHERE id=?", (note, qid))
+                execute("INSERT INTO events(queue_id,event,message) VALUES(?,?,?)", (qid, 'vision_check', note))
+                _logger.info('Processed vision for queue %s: %s', qid, note)
+            except Exception as e:
+                _logger.exception('Failed to process vision payload: %s', e)
             return
 
         # STATE: node readiness / online publish handled below (payload may include 'online' and/or 'ready')

@@ -15,3 +15,4 @@ MQTT_TOPIC_CMD = os.getenv("MQTT_TOPIC_CMD", "disp/cmd/+")  # subscribe to disp/
 MQTT_TOPIC_ACK = os.getenv("MQTT_TOPIC_ACK", "disp/ack/+")  # ack from nodes: disp/ack/{nodeId}
 MQTT_TOPIC_EVT = os.getenv("MQTT_TOPIC_EVT", "disp/evt/+")  # event done from nodes: disp/evt/{nodeId}
 MQTT_TOPIC_STATE = os.getenv("MQTT_TOPIC_STATE", "disp/state/+")  # node state/ready: disp/state/{nodeId}
+MQTT_TOPIC_VISION = os.getenv("MQTT_TOPIC_VISION", "disp/vision/+")  # vision messages from cameras: disp/vision/{nodeId}

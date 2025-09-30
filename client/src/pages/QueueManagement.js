@@ -64,10 +64,20 @@ export default function QueueManagement(){
   } else if (data.pending && data.pending.length > 0) {
     previous = data.pending.slice(0,5);
   } else {
-    previous = (data.previous || data.prev || data.prev_queue || []);
+    // backend may return a single object in data.previous (not an array)
+    const prevCandidate = data.previous || data.prev || data.prev_queue || []
+    previous = Array.isArray(prevCandidate) ? prevCandidate : (prevCandidate ? [prevCandidate] : [])
   }
+  // Ensure we don't show completed/success items in the "previous" card
+  previous = (previous || []).filter(it => !(it && it.status && /success|done|served/i.test(String(it.status))))
   // Show up to 5 served as lastFinished (ใหม่สุด -> เก่าสุด)
-  const lastFinished = (data.served && data.served.length) ? data.served.slice(-5).reverse() : []
+  // แต่กรองเอาเฉพาะที่ไม่มีหมายเหตุ "จำนวนไม่ตรง"
+  const lastFinished = (() => {
+    if (!data.served || !data.served.length) return []
+    // filter out queues where note indicates mismatch
+    const ok = data.served.filter(it => !(it && it.note && /จำนวนไม่ตรง/.test(it.note)))
+    return ok.slice(-5).reverse()
+  })()
 
   // คำนวณรายการที่สถานะล้มเหลว (fail/error) จากทุกแหล่งข้อมูลที่อาจมี
   const failed = (() => {
@@ -192,7 +202,7 @@ export default function QueueManagement(){
                    <div style={{fontSize:18,fontWeight:800}}>{patient}</div>
                    <div className="muted" style={{marginTop:6}}>ห้อง: {room}</div>
                    <div style={{marginTop:10}}>{renderStatus(it.status)}</div>
-                   {it.note && <div style={{marginTop:6,fontSize:13,color:'#b71c1c'}}>หมายเหตุ: {it.note}</div>}
+                   {/* {it.note && <div style={{marginTop:6,fontSize:13,color:'#b71c1c'}}>หมายเหตุ: {it.note}</div>} */}
                    {it.served_at && <div className="muted" style={{marginTop:6}}>{`เสร็จเมื่อ: ${it.served_at}`}</div>}
                  </div>
                </div>
