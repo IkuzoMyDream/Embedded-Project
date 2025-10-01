@@ -75,7 +75,7 @@ uint32_t lastReadyPub = 0;
 
 // Arduino communication
 unsigned long cmdSentTime = 0;
-const unsigned long CMD_TIMEOUT_MS = 30000; // 30 seconds timeout
+const unsigned long CMD_TIMEOUT_MS = 1000; // 1 second timeout
 char serialBuffer[64]; // Fixed size buffer instead of String
 uint8_t bufferIndex = 0;
 int pendingCommands = 0; // Track number of commands sent to Arduino
@@ -172,7 +172,7 @@ void mqttEnsure() {
     publishOnlineRetained();
     // announce ready to accept work
     publishReady(true);
-  } else {
+  } else { 
     Serial.printf("fail rc=%d\n", mqtt.state());
   }
 }

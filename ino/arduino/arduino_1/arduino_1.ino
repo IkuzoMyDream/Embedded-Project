@@ -241,7 +241,7 @@ void actuatePill(int queueId, int pillId, int quantity) {
     
     Serial.println("Servo movement complete, waiting 1 second...");
     // *** AUTO DC OFF after dispensing complete ***
-    delay(10000); // wait 1 second for pills to fully dispense
+    delay(1000); // wait 1 second for pills to fully dispense
     setDcState(false);
     Serial.println("Pill dispensing complete");
   } else {

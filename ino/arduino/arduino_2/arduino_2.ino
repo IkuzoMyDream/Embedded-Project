@@ -20,13 +20,13 @@
  *   - Set target room -> Monitor IR sensor for that room
  *   - IR detection -> Stop operation and send "done"
  *   - Simple state management with minimal dependencies
- */
+ */ 
 
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <Stepper.h>
 #include <Servo.h>
-
+ 
 // Servo myServo;
 // ---------- Communication pins ----------
 const uint8_t PIN_RX = 2;  // Arduino receives from NodeMCU TX
