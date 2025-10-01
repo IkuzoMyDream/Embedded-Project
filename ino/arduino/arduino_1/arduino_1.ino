@@ -332,6 +332,7 @@ void loop() {
   if (dc_running && (millis() - dc_start_time >= DC_AUTO_STOP_MS)) {
     Serial.println("DC motor auto-stop after 15 seconds");
     setDcState(false);
+    nodeSerial.println("done");
   }
   
   // Read serial commands from NodeMCU via SoftwareSerial
