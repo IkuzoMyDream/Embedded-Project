@@ -10,7 +10,7 @@
  * Pin Assignments:
  *   Pins 8,9,10,13 -> NEMA17 Stepper Motor Outputs
  *   Pins 2,3 -> TX/RX Communication
- *   Pins 4,5,6 -> IR Sensors 1,2,3
+ *   Pins 4,5 -> IR Sensors 1,2 (IR2 shared by room 2&3)
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
  *   Pin 11 -> Servo 1 (Digital output) 
@@ -18,6 +18,7 @@
  * Simplified Control:
  *   - Receive STEP command -> Start operation with 30s timeout
  *   - Set target room -> Monitor IR sensor for that room
+ *   - Room 1 uses IR sensor 1, Room 2&3 share IR sensor 2
  *   - IR detection -> Stop operation and send "done"
  *   - Simple state management with minimal dependencies
  */ 
@@ -38,8 +39,8 @@ Stepper myStepper(stepsPerRevolution, 8, 9, 10, 13);  // Initialize stepper on p
 
 // ---------- IR Sensor pins ----------
 const uint8_t PIN_IR_SENSOR1 = 4;  // IR sensor 1
-const uint8_t PIN_IR_SENSOR2 = 5;  // IR sensor 2
-const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3
+const uint8_t PIN_IR_SENSOR2 = 5;  // IR sensor 2 (shared by room 2 and 3)
+// const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3 - removed
 
 // ---------- Other actuator pins ----------
 const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
@@ -61,41 +62,16 @@ const unsigned long OPERATION_TIMEOUT = 30000; // 30 seconds timeout
 // IR Sensor edge detection
 bool lastIRSensor1State = false;
 bool lastIRSensor2State = false;
-bool lastIRSensor3State = false;
+// bool lastIRSensor3State = false; // Removed - no longer needed
 
 // Stepper control
 unsigned long lastStepTime = 0;
-const unsigned long stepInterval = 100; // Step every 100ms
+const unsigned long stepInterval = 50; // Step every 50ms (faster for more power)
 
 // Pump auto-stop timer
 unsigned long pumpStartTime = 0;
 const unsigned long PUMP_RUN_DURATION = 1000; // 1 second
 bool pumpAutoStop = false;
-
-// ---------- Simple actuator functions ----------
-// void triggerServo() {
-//   digitalWrite(PIN_SERVO1, HIGH);
-//   delay(500); // Pulse duration
-//   digitalWrite(PIN_SERVO1, LOW);
-//   Serial.println("[SERVO] Triggered");
-// }
-
-// void triggerServoDirection(int room) {
-//   if (room == 2) {
-//     // Room 2 -> หัน left
-//     myServo.write(1);    // มุมตรงกลาง
-
-//     Serial.println("[SERVO] Room 2 - Turn LEFT");
-//   } else if (room == 3) {
-//     // Room 3 -> หัน right  
-//     myServo.write(45);    // มุมตรงกลาง
-
-//     Serial.println("[SERVO] Room 3 - Turn RIGHT");
-//   } else {
-//     // Default trigger
-//     triggerServo();
-//   }
-// }
  
 void setPump(bool on) {
   digitalWrite(PIN_PUMP, on ? HIGH : LOW);
@@ -120,13 +96,13 @@ void setDC(bool on) {
 
 // ---------- Hardware setup ----------
 void setupHardware() {
-  // Configure stepper motor speed
-  myStepper.setSpeed(10); // RPM
+  // Configure stepper motor speed (increased for more torque)
+  myStepper.setSpeed(20); // RPM (increased from 10 to 20)
   
   // Set pin modes
   pinMode(PIN_IR_SENSOR1, INPUT);
   pinMode(PIN_IR_SENSOR2, INPUT);
-  pinMode(PIN_IR_SENSOR3, INPUT);
+  // pinMode(PIN_IR_SENSOR3, INPUT); // Removed - no longer used
   pinMode(PIN_DC_EN, OUTPUT);
   pinMode(PIN_PUMP, OUTPUT);
   // pinMode(PIN_SERVO1, OUTPUT); // Commented out - no servo
@@ -136,7 +112,7 @@ void setupHardware() {
   digitalWrite(PIN_PUMP, LOW);
   // digitalWrite(PIN_SERVO1, LOW); // Commented out - no servo
   
-  Serial.println("[HARDWARE] Setup complete");
+  Serial.println("[HARDWARE] Setup complete - Stepper speed: 20 RPM");
 }
 
 // ---------- Emergency stop all motors ----------
@@ -186,7 +162,7 @@ void stopOperation(const char* reason) {
   Serial.println("[SYSTEM] All motors and actuators stopped");
   
   // Send done to NodeMCU
-  nodeSerial.println("done");
+  // nodeSerial.println("done");
   
   // Reset simple state
   targetRoom = -1;
@@ -208,9 +184,9 @@ void stepperLoop() {
     lastStepTime = millis();
     
     if (stepDirection == 0) {
-      myStepper.step(10);  // Clockwise
+      myStepper.step(20);  // Clockwise (increased from 10 to 20 steps)
     } else {
-      myStepper.step(-10); // Counterclockwise
+      myStepper.step(-20); // Counterclockwise (increased from 10 to 20 steps)
     }
   }
 }
@@ -245,12 +221,15 @@ void checkIRSensors() {
     Serial.println(detected);
     
     lastIRSensor1State = current;
-  } else if (targetRoom == 2) {
+  } else if (targetRoom == 2 || targetRoom == 3) {
+    // Both room 2 and room 3 use IR sensor 2
     bool current = digitalRead(PIN_IR_SENSOR2);
     detected = current && !lastIRSensor2State;  // Detect LOW -> HIGH (box removed)
     
     // Debug output
-    Serial.print("[IR2] Current:");
+    Serial.print("[IR2] Room:");
+    Serial.print(targetRoom);
+    Serial.print(" Current:");
     Serial.print(current);
     Serial.print(" Last:");
     Serial.print(lastIRSensor2State);
@@ -258,25 +237,15 @@ void checkIRSensors() {
     Serial.println(detected);
     
     lastIRSensor2State = current;
-  } else if (targetRoom == 3) {
-    bool current = digitalRead(PIN_IR_SENSOR3);
-    detected = current && !lastIRSensor3State;  // Detect LOW -> HIGH (box removed)
-    
-    // Debug output
-    Serial.print("[IR3] Current:");
-    Serial.print(current);
-    Serial.print(" Last:");
-    Serial.print(lastIRSensor3State);
-    Serial.print(" Detected:");
-    Serial.println(detected);
-    
-    lastIRSensor3State = current;
   }
   
   if (detected) {
     Serial.print("[IR");
+    if (targetRoom == 1) Serial.print("1");
+    else Serial.print("2"); // Show IR2 for both room 2 and 3
+    Serial.print("] DETECTED - Room ");
     Serial.print(targetRoom);
-    Serial.println("] DETECTED - Box removed from sensor!");
+    Serial.println(" box removed from sensor!");
     stopOperation("IR_DETECTED");
   }
 }
@@ -307,7 +276,12 @@ void processCommand(char* command) {
     if (room >= 1 && room <= 3) {
       targetRoom = room;
       Serial.print("[ROOM] Target set to ");
-      Serial.println(room);
+      Serial.print(room);
+      if (room == 2 || room == 3) {
+        Serial.println(" (using IR sensor 2)");
+      } else {
+        Serial.println(" (using IR sensor 1)");
+      }
       Serial.println("ack");
       nodeSerial.println("ack");
     } else {
@@ -316,14 +290,7 @@ void processCommand(char* command) {
     }
     return;
   }
-  
-  // Simple servo trigger with direction based on room
-  // if (strncmp(command, "SERVO1,1", 8) == 0 || strncmp(command, "SERVO5,1", 8) == 0) {
-    // triggerServoDirection(targetRoom); // Use current target room for direction
-  //   Serial.println("ack");
-  //   nodeSerial.println("ack");
-  //   return;
-  // }
+
   
   // Simple pump control
   if (strncmp(command, "PUMP,", 5) == 0) {
@@ -378,14 +345,13 @@ void setup() {
   // Initialize IR sensor states with actual readings
   lastIRSensor1State = digitalRead(PIN_IR_SENSOR1);
   lastIRSensor2State = digitalRead(PIN_IR_SENSOR2);
-  lastIRSensor3State = digitalRead(PIN_IR_SENSOR3);
+  // lastIRSensor3State = digitalRead(PIN_IR_SENSOR3); // Removed - no longer used
   
   Serial.print("[IR] Initial states - IR1:");
   Serial.print(lastIRSensor1State);
   Serial.print(" IR2:");
   Serial.print(lastIRSensor2State);
-  Serial.print(" IR3:");
-  Serial.println(lastIRSensor3State);
+  Serial.println(" (IR2 shared by room 2&3)");
   
   // Clear buffer
   memset(serialBuffer, 0, sizeof(serialBuffer));

@@ -75,7 +75,7 @@ uint32_t lastReadyPub = 0;
 
 // Arduino communication
 unsigned long cmdSentTime = 0;
-const unsigned long CMD_TIMEOUT_MS = 1000; // 1 second timeout
+const unsigned long CMD_TIMEOUT_MS = 10000; // 1 second timeout
 char serialBuffer[64]; // Fixed size buffer instead of String
 uint8_t bufferIndex = 0;
 int pendingCommands = 0; // Track number of commands sent to Arduino
