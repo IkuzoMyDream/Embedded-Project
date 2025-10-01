@@ -42,30 +42,23 @@ const uint8_t PIN_SERVO4_OUT = 12;
 
 // ---------- DC motor outputs ----------
 const uint8_t PIN_DC_EN_OUT  = 8;  // ON/OFF enable line
-const uint8_t PIN_DC_DIR_OUT = 7;  // direction control
 
 // ---------- Servo positions ----------
 const uint8_t SERVO_CLOSED = 60;   // closed position
 const uint8_t SERVO_OPEN   = 120;  // open position
 
-// ---------- Operation timing ----------
-const unsigned long BATCH_DELAY_MS = 10000; // 10 seconds delay after all operations complete
-const unsigned long COMMAND_TIMEOUT_MS = 3000; // 3 seconds timeout for detecting end of batch
-const unsigned long OPERATION_DURATION_MS = 10000; // 10 seconds operation duration
+// ---------- DC auto-stop timing ----------
+const unsigned long DC_AUTO_STOP_MS = 15000; // 15 seconds auto-stop
 
 // ---------- State ----------
 Servo servo1, servo2, servo3, servo4;
 SoftwareSerial nodeSerial(PIN_RX, PIN_TX); // RX, TX for communication with NodeMCU
 char serialBuffer[64]; // Fixed size buffer instead of String
 uint8_t bufferIndex = 0;
-bool dc_state = false;
 
-// ---------- Operation timing state ----------
-bool batchInProgress = false;
-unsigned long lastCommandTime = 0;
-unsigned long batchStartTime = 0;
-bool batchCompleted = false;
-int currentQueueId = -1;
+// ---------- DC motor timing state ----------
+bool dc_running = false;
+unsigned long dc_start_time = 0;
 
 // ---------- Servo state tracking ----------
 bool servo1_isLeft = false;  // false=ขวา(60°), true=ซ้าย(120°)
@@ -183,19 +176,19 @@ void setupActuators() {
   servo4_isLeft = true;   // เริ่มที่ซ้าย (120°)
 
   pinMode(PIN_DC_EN_OUT, OUTPUT);
-  pinMode(PIN_DC_DIR_OUT, OUTPUT);
-  digitalWrite(PIN_DC_EN_OUT, LOW);   // OFF
-  digitalWrite(PIN_DC_DIR_OUT, LOW);  // default direction
+  digitalWrite(PIN_DC_EN_OUT, LOW);   // OFF initially
 }
 
 void setDcState(bool on) {
-  dc_state = on;
+  dc_running = on;
   digitalWrite(PIN_DC_EN_OUT, on ? HIGH : LOW);
-  Serial.print("DC Motor: ");
-  Serial.println(on ? "ON" : "OFF");
-  nodeSerial.println(on ? "DC:1" : "DC:0");
-  Serial.print("TX -> NodeMCU: ");
-  Serial.println(on ? "DC:1" : "DC:0");
+  
+  if (on) {
+    dc_start_time = millis(); // Record when DC started
+    Serial.println("DC Motor: ON - will auto-stop in 15 seconds");
+  } else {
+    Serial.println("DC Motor: OFF");
+  }
 }
 
 void controlServo(int servoId, int position) {
@@ -218,11 +211,6 @@ void controlServo(int servoId, int position) {
   }
   
   int currentPos = targetServo->read();
-  Serial.print("Current position: ");
-  Serial.print(currentPos);
-  Serial.print(" -> Target: ");
-  Serial.println(position);
-  
   smoothMove(*targetServo, currentPos, position);
   Serial.println("Servo movement complete");
 }
@@ -263,7 +251,10 @@ void actuatePill(int queueId, int pillId, int quantity) {
     }
     
     Serial.println("Servo movement complete");
-    // Note: No immediate "done" - waiting for batch completion
+    
+    // Send done immediately after servo completion
+    nodeSerial.println("done");
+    Serial.println("TX -> NodeMCU: done");
     
   } else {
     Serial.print("Invalid pill ID: ");
@@ -282,16 +273,8 @@ void processCommand(char* command) {
     Serial.print("Processing DC command, value: ");
     Serial.println(value);
     setDcState(value != 0);
-    
-    // Update batch timing for DC commands
-    if (!batchInProgress && value != 0) {
-      batchInProgress = true;
-      batchStartTime = millis();
-      Serial.println("Batch operation started with DC command");
-    }
-    lastCommandTime = millis();
-    
-    // Note: No immediate "done" response during batch operations
+    nodeSerial.println("done");
+    Serial.println("TX -> NodeMCU: done");
     return;
   }
   
@@ -303,17 +286,9 @@ void processCommand(char* command) {
       Serial.print(servoId);
       Serial.print(", position: ");
       Serial.println(position);
-      
-      // Update batch timing for SERVO commands
-      if (!batchInProgress) {
-        batchInProgress = true;
-        batchStartTime = millis();
-        Serial.println("Batch operation started with SERVO command");
-      }
-      lastCommandTime = millis();
-      
       controlServo(servoId, position);
-      // Note: No immediate "done" response during batch operations
+      nodeSerial.println("done");
+      Serial.println("TX -> NodeMCU: done");
       return;
     }
   }
@@ -328,7 +303,6 @@ void processCommand(char* command) {
     Serial.print(", qty: ");
     Serial.println(quantity);
     actuatePill(queueId, pillId, quantity);
-    // Note: "done" will be sent automatically after OPERATION_DURATION_MS in main loop
   } else {
     Serial.print("Unknown command: ");
     Serial.println(command);
@@ -348,51 +322,16 @@ void setup() {
   memset(serialBuffer, 0, sizeof(serialBuffer));
   bufferIndex = 0;
   
-  // Initialize operation timing state
-  batchInProgress = false;
-  batchCompleted = false;
-  lastCommandTime = 0;
-  batchStartTime = 0;
-  currentQueueId = -1;
+  // Initialize DC state
+  dc_running = false;
+  dc_start_time = 0;
 }
 
 void loop() {
-  // Check batch operation timing
-  if (batchInProgress && !batchCompleted) {
-    // Check if enough time has passed since last command (batch timeout)
-    if (millis() - lastCommandTime >= COMMAND_TIMEOUT_MS) {
-      Serial.println("No new commands - starting batch completion timer");
-      batchCompleted = true;
-      lastCommandTime = millis(); // Reuse for completion delay timing
-    }
-  }
-  
-  // Check if batch completion delay has finished
-  if (batchCompleted && (millis() - lastCommandTime >= BATCH_DELAY_MS)) {
-    Serial.println("Batch completion delay finished - sending done and stopping systems");
-    
-    // Stop DC motor
+  // Check DC motor auto-stop (15 seconds)
+  if (dc_running && (millis() - dc_start_time >= DC_AUTO_STOP_MS)) {
+    Serial.println("DC motor auto-stop after 15 seconds");
     setDcState(false);
-    
-    // Reset all servos to closed position (60°)
-    Serial.println("Resetting all servos to closed position");
-    controlServo(1, SERVO_CLOSED);
-    delay(100);
-    controlServo(2, SERVO_CLOSED);
-    delay(100);
-    controlServo(3, SERVO_CLOSED);
-    delay(100);
-    controlServo(4, SERVO_CLOSED);
-    
-    // Send final done response
-    nodeSerial.println("done");
-    Serial.println("TX -> NodeMCU: done (batch complete)");
-    
-    // Reset batch state
-    batchInProgress = false;
-    batchCompleted = false;
-    currentQueueId = -1;
-    Serial.println("Batch operation fully completed - ready for new commands");
   }
   
   // Read serial commands from NodeMCU via SoftwareSerial
