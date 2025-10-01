@@ -326,7 +326,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) wifiEnsure();
   if (!mqtt.connected()) mqttEnsure();
   mqtt.loop();
-
+  
   // Read responses from Arduino via SoftwareSerial
   while (arduinoSerial.available()) {
     char c = arduinoSerial.read();

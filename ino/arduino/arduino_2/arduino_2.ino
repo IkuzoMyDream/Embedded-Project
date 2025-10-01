@@ -13,7 +13,6 @@
  *   Pins 4,5 -> IR Sensors 1,2 (IR2 shared by room 2&3)
  *   Pin 7 -> DC Motor Enable
  *   Pin 12 -> Pump
- *   Pin 11 -> Servo 1 (Digital output) 
  *
  * Simplified Control:
  *   - Receive STEP command -> Start operation with 30s timeout
@@ -102,15 +101,12 @@ void setupHardware() {
   // Set pin modes
   pinMode(PIN_IR_SENSOR1, INPUT);
   pinMode(PIN_IR_SENSOR2, INPUT);
-  // pinMode(PIN_IR_SENSOR3, INPUT); // Removed - no longer used
   pinMode(PIN_DC_EN, OUTPUT);
   pinMode(PIN_PUMP, OUTPUT);
-  // pinMode(PIN_SERVO1, OUTPUT); // Commented out - no servo
   
   // Initialize outputs to OFF
   digitalWrite(PIN_DC_EN, LOW);
   digitalWrite(PIN_PUMP, LOW);
-  // digitalWrite(PIN_SERVO1, LOW); // Commented out - no servo
   
   Serial.println("[HARDWARE] Setup complete - Stepper speed: 20 RPM");
 }
@@ -120,7 +116,6 @@ void emergencyStopAll() {
   // Force stop everything immediately
   digitalWrite(PIN_DC_EN, LOW);    // DC motor OFF
   digitalWrite(PIN_PUMP, LOW);     // Pump OFF
-  // digitalWrite(PIN_SERVO1, LOW); // Servo OFF - commented out
   
   // Reset operation state
   isOperating = false;
@@ -162,7 +157,7 @@ void stopOperation(const char* reason) {
   Serial.println("[SYSTEM] All motors and actuators stopped");
   
   // Send done to NodeMCU
-  // nodeSerial.println("done");
+  nodeSerial.println("done");
   
   // Reset simple state
   targetRoom = -1;
@@ -211,30 +206,11 @@ void checkIRSensors() {
   if (targetRoom == 1) {
     bool current = digitalRead(PIN_IR_SENSOR1);
     detected = current && !lastIRSensor1State;  // Detect LOW -> HIGH (box removed)
-    
-    // Debug output
-    Serial.print("[IR1] Current:");
-    Serial.print(current);
-    Serial.print(" Last:");
-    Serial.print(lastIRSensor1State);
-    Serial.print(" Detected:");
-    Serial.println(detected);
-    
     lastIRSensor1State = current;
   } else if (targetRoom == 2 || targetRoom == 3) {
     // Both room 2 and room 3 use IR sensor 2
     bool current = digitalRead(PIN_IR_SENSOR2);
     detected = current && !lastIRSensor2State;  // Detect LOW -> HIGH (box removed)
-    
-    // Debug output
-    Serial.print("[IR2] Room:");
-    Serial.print(targetRoom);
-    Serial.print(" Current:");
-    Serial.print(current);
-    Serial.print(" Last:");
-    Serial.print(lastIRSensor2State);
-    Serial.print(" Detected:");
-    Serial.println(detected);
     
     lastIRSensor2State = current;
   }
