@@ -27,7 +27,7 @@
 #include <Stepper.h>
 #include <Servo.h>
 
-Servo myServo;
+// Servo myServo;
 // ---------- Communication pins ----------
 const uint8_t PIN_RX = 2;  // Arduino receives from NodeMCU TX
 const uint8_t PIN_TX = 3;  // Arduino sends to NodeMCU RX
@@ -44,7 +44,7 @@ const uint8_t PIN_IR_SENSOR3 = 6;  // IR sensor 3
 // ---------- Other actuator pins ----------
 const uint8_t PIN_DC_EN = 7;       // DC Motor Enable
 const uint8_t PIN_PUMP = 12;       // Pump 
-const uint8_t PIN_SERVO1 = 11;     // Servo 1 (digital output)
+// const uint8_t PIN_SERVO1 = 11;     // Servo 1 (digital output)
 
 // ---------- Communication ----------
 SoftwareSerial nodeSerial(PIN_RX, PIN_TX); // RX, TX for communication with NodeMCU
@@ -67,35 +67,49 @@ bool lastIRSensor3State = false;
 unsigned long lastStepTime = 0;
 const unsigned long stepInterval = 100; // Step every 100ms
 
+// Pump auto-stop timer
+unsigned long pumpStartTime = 0;
+const unsigned long PUMP_RUN_DURATION = 1000; // 1 second
+bool pumpAutoStop = false;
+
 // ---------- Simple actuator functions ----------
-void triggerServo() {
-  digitalWrite(PIN_SERVO1, HIGH);
-  delay(500); // Pulse duration
-  digitalWrite(PIN_SERVO1, LOW);
-  Serial.println("[SERVO] Triggered");
-}
+// void triggerServo() {
+//   digitalWrite(PIN_SERVO1, HIGH);
+//   delay(500); // Pulse duration
+//   digitalWrite(PIN_SERVO1, LOW);
+//   Serial.println("[SERVO] Triggered");
+// }
 
-void triggerServoDirection(int room) {
-  if (room == 2) {
-    // Room 2 -> หัน left
-    myServo.write(1);    // มุมตรงกลาง
+// void triggerServoDirection(int room) {
+//   if (room == 2) {
+//     // Room 2 -> หัน left
+//     myServo.write(1);    // มุมตรงกลาง
 
-    Serial.println("[SERVO] Room 2 - Turn LEFT");
-  } else if (room == 3) {
-    // Room 3 -> หัน right  
-    myServo.write(45);    // มุมตรงกลาง
+//     Serial.println("[SERVO] Room 2 - Turn LEFT");
+//   } else if (room == 3) {
+//     // Room 3 -> หัน right  
+//     myServo.write(45);    // มุมตรงกลาง
 
-    Serial.println("[SERVO] Room 3 - Turn RIGHT");
-  } else {
-    // Default trigger
-    triggerServo();
-  }
-}
-
+//     Serial.println("[SERVO] Room 3 - Turn RIGHT");
+//   } else {
+//     // Default trigger
+//     triggerServo();
+//   }
+// }
+ 
 void setPump(bool on) {
   digitalWrite(PIN_PUMP, on ? HIGH : LOW);
   Serial.print("[PUMP] ");
   Serial.println(on ? "ON" : "OFF");
+  
+  if (on) {
+    // Start pump timer for auto-stop after 1 second
+    pumpStartTime = millis();
+    pumpAutoStop = true;
+  } else {
+    // Manual stop - clear timer
+    pumpAutoStop = false;
+  }
 }
 
 void setDC(bool on) {
@@ -115,12 +129,12 @@ void setupHardware() {
   pinMode(PIN_IR_SENSOR3, INPUT);
   pinMode(PIN_DC_EN, OUTPUT);
   pinMode(PIN_PUMP, OUTPUT);
-  pinMode(PIN_SERVO1, OUTPUT);
+  // pinMode(PIN_SERVO1, OUTPUT); // Commented out - no servo
   
   // Initialize outputs to OFF
   digitalWrite(PIN_DC_EN, LOW);
   digitalWrite(PIN_PUMP, LOW);
-  digitalWrite(PIN_SERVO1, LOW);
+  // digitalWrite(PIN_SERVO1, LOW); // Commented out - no servo
   
   Serial.println("[HARDWARE] Setup complete");
 }
@@ -130,12 +144,13 @@ void emergencyStopAll() {
   // Force stop everything immediately
   digitalWrite(PIN_DC_EN, LOW);    // DC motor OFF
   digitalWrite(PIN_PUMP, LOW);     // Pump OFF
-  digitalWrite(PIN_SERVO1, LOW);   // Servo OFF
+  // digitalWrite(PIN_SERVO1, LOW); // Servo OFF - commented out
   
   // Reset operation state
   isOperating = false;
   targetRoom = -1;
   stepDirection = 0;
+  pumpAutoStop = false; // Clear pump timer
   
   Serial.println("[EMERGENCY] All systems stopped!");
 }
@@ -162,8 +177,8 @@ void stopOperation(const char* reason) {
   
   // Stop ALL motors and actuators immediately
   setDC(false);          // Stop DC motor
-  setPump(false);        // Stop pump
-  digitalWrite(PIN_SERVO1, LOW);  // Stop servo
+  setPump(false);        // Stop pump (this will clear auto timer)
+  // digitalWrite(PIN_SERVO1, LOW);  // Stop servo - commented out
   
   // Note: Stepper motor will stop automatically in stepperLoop() 
   // when isOperating = false
@@ -197,6 +212,16 @@ void stepperLoop() {
     } else {
       myStepper.step(-10); // Counterclockwise
     }
+  }
+}
+
+// ---------- Pump auto-stop check ----------
+void checkPumpTimer() {
+  if (pumpAutoStop && (millis() - pumpStartTime > PUMP_RUN_DURATION)) {
+    // Auto stop pump after 1 second
+    digitalWrite(PIN_PUMP, LOW);
+    pumpAutoStop = false;
+    Serial.println("[PUMP] Auto-stopped after 1 second");
   }
 }
 
@@ -293,12 +318,12 @@ void processCommand(char* command) {
   }
   
   // Simple servo trigger with direction based on room
-  if (strncmp(command, "SERVO1,1", 8) == 0 || strncmp(command, "SERVO5,1", 8) == 0) {
-    triggerServoDirection(targetRoom); // Use current target room for direction
-    Serial.println("ack");
-    nodeSerial.println("ack");
-    return;
-  }
+  // if (strncmp(command, "SERVO1,1", 8) == 0 || strncmp(command, "SERVO5,1", 8) == 0) {
+    // triggerServoDirection(targetRoom); // Use current target room for direction
+  //   Serial.println("ack");
+  //   nodeSerial.println("ack");
+  //   return;
+  // }
   
   // Simple pump control
   if (strncmp(command, "PUMP,", 5) == 0) {
@@ -343,10 +368,10 @@ void processCommand(char* command) {
 void setup() {
   Serial.begin(9600);     
   nodeSerial.begin(9600);
-  myServo.attach(PIN_SERVO1);  
+  // myServo.attach(PIN_SERVO1); // Commented out - no servo  
   delay(200);
   Serial.println(F("[ARDUINO2] Simplified controller ready"));
-  Serial.println(F("[ARDUINO2] Commands: STEP,0/1 ROOM,1/2/3 SERVO1,1 PUMP,0/1 DC,0/1 STOP"));
+  Serial.println(F("[ARDUINO2] Commands: STEP,0/1 ROOM,1/2/3 PUMP,0/1 DC,0/1 STOP"));
    
   setupHardware();
   
@@ -370,6 +395,7 @@ void setup() {
   isOperating = false;
   targetRoom = 0;
   stepDirection = 0;
+  pumpAutoStop = false; // Initialize pump timer
 }
 
 void loop() {
@@ -393,6 +419,7 @@ void loop() {
   // Simple operation loop
   stepperLoop();
   checkIRSensors();
+  checkPumpTimer(); // Check pump auto-stop timer
   
   delay(1);
 }

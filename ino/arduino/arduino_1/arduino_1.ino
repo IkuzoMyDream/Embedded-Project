@@ -179,10 +179,19 @@ void setupActuators() {
 void setDcState(bool on) {
   dc_state = on;
   digitalWrite(PIN_DC_EN_OUT, on ? HIGH : LOW);
+  Serial.print("DC Motor: ");
+  Serial.println(on ? "ON" : "OFF");
   nodeSerial.println(on ? "DC:1" : "DC:0");
+  Serial.print("TX -> NodeMCU: ");
+  Serial.println(on ? "DC:1" : "DC:0");
 }
 
 void controlServo(int servoId, int position) {
+  Serial.print("Moving servo ");
+  Serial.print(servoId);
+  Serial.print(" to position ");
+  Serial.println(position);
+  
   Servo* targetServo = nullptr;
   
   switch (servoId) {
@@ -190,19 +199,38 @@ void controlServo(int servoId, int position) {
     case 2: targetServo = &servo2; break;
     case 3: targetServo = &servo3; break;
     case 4: targetServo = &servo4; break;
-    default: return;
+    default: 
+      Serial.print("Invalid servo ID: ");
+      Serial.println(servoId);
+      return;
   }
   
   int currentPos = targetServo->read();
+  Serial.print("Current position: ");
+  Serial.print(currentPos);
+  Serial.print(" -> Target: ");
+  Serial.println(position);
+  
   smoothMove(*targetServo, currentPos, position);
+  Serial.println("Servo movement complete");
 }
 
 void actuatePill(int queueId, int pillId, int quantity) {
+  Serial.print("Starting pill dispensing - Queue: ");
+  Serial.print(queueId);
+  Serial.print(", Pill: ");
+  Serial.print(pillId);
+  Serial.print(", Quantity: ");
+  Serial.println(quantity);
+  
   // *** AUTO DC ON for any pill request ***
   setDcState(true);
   
   // Direct mapping: pill_id = servo number with alternating movement logic
   if (pillId >= 1 && pillId <= 4) {
+    Serial.print("Executing servo logic for pill ");
+    Serial.println(pillId);
+    
     // Execute servo-specific logic with quantity parameter
     switch (pillId) {
       case 1: servoLogic1(quantity); break;
@@ -211,18 +239,30 @@ void actuatePill(int queueId, int pillId, int quantity) {
       case 4: servoLogic4(quantity); break;
     }
     
+    Serial.println("Servo movement complete, waiting 1 second...");
     // *** AUTO DC OFF after dispensing complete ***
     delay(10000); // wait 1 second for pills to fully dispense
     setDcState(false);
+    Serial.println("Pill dispensing complete");
+  } else {
+    Serial.print("Invalid pill ID: ");
+    Serial.println(pillId);
   }
 }
 
 void processCommand(char* command) {
+  // Debug: Print received command
+  Serial.print("RX <- NodeMCU: ");
+  Serial.println(command);
+  
   // Parse DC command: "DC,0" or "DC,1"
   if (strncmp(command, "DC,", 3) == 0) {
     int value = atoi(command + 3);
+    Serial.print("Processing DC command, value: ");
+    Serial.println(value);
     setDcState(value != 0);
     nodeSerial.println("done");
+    Serial.println("TX -> NodeMCU: done");
     return;
   }
   
@@ -230,8 +270,13 @@ void processCommand(char* command) {
   if (strncmp(command, "SERVO,", 6) == 0) {
     int servoId, position;
     if (sscanf(command + 6, "%d,%d", &servoId, &position) == 2) {
+      Serial.print("Processing SERVO command, id: ");
+      Serial.print(servoId);
+      Serial.print(", position: ");
+      Serial.println(position);
       controlServo(servoId, position);
       nodeSerial.println("done");
+      Serial.println("TX -> NodeMCU: done");
       return;
     }
   }
@@ -239,8 +284,18 @@ void processCommand(char* command) {
   // Parse pill command: "queue_id,pill_id,quantity"
   int queueId, pillId, quantity;
   if (sscanf(command, "%d,%d,%d", &queueId, &pillId, &quantity) == 3) {
+    Serial.print("Processing PILL command, queue: ");
+    Serial.print(queueId);
+    Serial.print(", pill: ");
+    Serial.print(pillId);
+    Serial.print(", qty: ");
+    Serial.println(quantity);
     actuatePill(queueId, pillId, quantity);
     nodeSerial.println("done");
+    Serial.println("TX -> NodeMCU: done");
+  } else {
+    Serial.print("Unknown command: ");
+    Serial.println(command);
   }
 }
 
@@ -272,6 +327,25 @@ void loop() {
       serialBuffer[bufferIndex++] = c;
     } else {
       // Buffer overflow protection - reset
+      Serial.println("Buffer overflow - resetting");
+      bufferIndex = 0;
+    }
+  }
+  
+  // Check for commands from USB Serial for testing
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (bufferIndex > 0) {
+        serialBuffer[bufferIndex] = '\0';
+        Serial.print("Manual command: ");
+        Serial.println(serialBuffer);
+        processCommand(serialBuffer);
+        bufferIndex = 0;
+      }
+    } else if (bufferIndex < sizeof(serialBuffer) - 1) {
+      serialBuffer[bufferIndex++] = c;
+    } else {
       bufferIndex = 0;
     }
   }

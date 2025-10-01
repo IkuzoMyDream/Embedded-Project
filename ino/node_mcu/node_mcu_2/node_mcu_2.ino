@@ -278,7 +278,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   // Trigger room-specific actuators
   if (targetRoom == 2) {
-    sendToArduino("SERVO5,1");
+    // sendToArduino("SERVO5,1");
     delay(100);
   } else if (targetRoom == 3) {
     sendToArduino("PUMP,1");  // Room 3 only has pump, no SERVO6
