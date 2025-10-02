@@ -223,17 +223,6 @@ void actuatePill(int queueId, int pillId, int quantity) {
   Serial.print(", Quantity: ");
   Serial.println(quantity);
   
-  // Start batch if not already active
-  if (!batchInProgress) {
-    batchInProgress = true;
-    batchStartTime = millis();
-    currentQueueId = queueId;
-    Serial.println("Batch operation started");
-  }
-  
-  // Update last command time
-  lastCommandTime = millis();
-  
   // *** AUTO DC ON for any pill request ***
   setDcState(true);
   
@@ -242,15 +231,29 @@ void actuatePill(int queueId, int pillId, int quantity) {
     Serial.print("Executing servo logic for pill ");
     Serial.println(pillId);
     
-    // Execute servo-specific logic with quantity parameter
-    switch (pillId) {
-      case 1: servoLogic1(quantity); break;
-      case 2: servoLogic2(quantity); break;
-      case 3: servoLogic3(quantity); break;
-      case 4: servoLogic4(quantity); break;
+    // Execute servo-specific logic with 1 second delay between each pill
+    for (int i = 0; i < quantity; i++) {
+      Serial.print("Dispensing pill ");
+      Serial.print(i + 1);
+      Serial.print(" of ");
+      Serial.println(quantity);
+      
+      // Execute one pulse for this pill
+      switch (pillId) {
+        case 1: servoLogic1(1); break;  // Always 1 pulse per pill
+        case 2: servoLogic2(1); break;
+        case 3: servoLogic3(1); break;
+        case 4: servoLogic4(1); break;
+      }
+      
+      // Delay 1 second between each pill (except for the last one)
+      if (i < quantity - 1) {
+        Serial.println("Waiting 1 second before next pill...");
+        delay(1000); // 1 second delay between pills
+      }
     }
     
-    Serial.println("Servo movement complete");
+    Serial.println("All servo movements complete");
     
     // Send done immediately after servo completion
     nodeSerial.println("done");

@@ -12,7 +12,7 @@
  *   Pins 2,3 -> TX/RX Communication
  *   Pins 4,5 -> IR Sensors 1,2 (IR2 shared by room 2&3)
  *   Pin 7 -> DC Motor Enable
- *   Pin 12 -> Pump
+ *   Pin 12 -> Pumpcwe
  *
  * Simplified Control:
  *   - Receive STEP command -> Start operation with 30s timeout
@@ -178,6 +178,8 @@ void stepperLoop() {
   if (millis() - lastStepTime > stepInterval) {
     lastStepTime = millis();
     
+
+    // FIX HERE FOR DIRECTION 
     if (stepDirection == 0) {
       myStepper.step(20);  // Clockwise (increased from 10 to 20 steps)
     } else {
